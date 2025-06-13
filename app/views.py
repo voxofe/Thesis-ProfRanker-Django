@@ -1,12 +1,16 @@
 from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
+from .serializers import ApplicationSerializer, PaperSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
+from .utils import calculate_points
 from .models import Application, Paper
 from .serializers import ApplicationSerializer
 import time
 import json
+
 
 def process_paper(paper):
     if paper.get("type") == "journal":
@@ -24,7 +28,7 @@ def handle_form_submission(request):
             papers_json = form_data.get("papers", "[]")
             papers = json.loads(papers_json)
 
-            # Create the Application instance
+            # Create the Application instance WITHOUT points first
             application = Application.objects.create(
                 first_name=form_data.get("firstName"),
                 last_name=form_data.get("lastName"),
@@ -41,8 +45,10 @@ def handle_form_submission(request):
                 doatap_document=request.FILES.get("doatapDocument"),
                 military_obligations_document=request.FILES.get("militaryObligationsDocument"),
                 cv_document=request.FILES.get("cvDocument"),
+
             )
 
+            # Process papers FIRST
             sjr_results = []
             with ThreadPoolExecutor(max_workers=4) as executor: 
                 future_to_paper = {executor.submit(process_paper, paper): paper for paper in papers}
@@ -71,6 +77,14 @@ def handle_form_submission(request):
                         quartile=sjr_result["sjr_quartile"],
                         country=sjr_result["country"],
                     )
+            # Retrieve all Paper instances for the application
+            papers = Paper.objects.filter(application=application)
+
+            # Now calculate points AFTER papers are processed
+            calculated_points = calculate_points(application, papers)
+            
+            # Update the Application instance with the calculated points
+            Application.objects.filter(id=application.id).update(**calculated_points)
 
             # Serialize the application instance
             application_serializer = ApplicationSerializer(application)
@@ -89,3 +103,19 @@ def handle_form_submission(request):
             return JsonResponse({'error': str(e)}, status=400)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
+@api_view(["GET"])
+def get_applicant(request, id):
+    applicant = get_object_or_404(Application, id=id)
+    serializer = ApplicationSerializer(applicant)
+    return JsonResponse(serializer.data, safe=False)
+
+@api_view(["GET"])
+def get_applicant_papers(request, id):
+    """
+    Fetch all papers associated with a specific applicant ID.
+    """
+    application = get_object_or_404(Application, id=id)
+    papers = application.papers.all()  # Use the related_name "papers" from the Paper model
+    serializer = PaperSerializer(papers, many=True)
+    return JsonResponse(serializer.data, safe=False)

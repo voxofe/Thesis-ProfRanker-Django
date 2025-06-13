@@ -5,8 +5,9 @@ from .models import Paper, Application
 class PaperSerializer(serializers.ModelSerializer):
     class Meta:
         model = Paper
-        fields = ['type', 'paper_title', 'journal_conf_title', 'year', 'issn', 'country']
+        fields = ['type', 'paper_title', 'journal_conf_title', 'year', 'issn', 'country', 'quartile']
 
+# Serializer for Application
 class ApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Application

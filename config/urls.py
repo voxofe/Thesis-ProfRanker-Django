@@ -23,7 +23,9 @@ from app import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/submit/', views.handle_form_submission, name="handle_form_submission")
+    path('api/submit/', views.handle_form_submission, name="handle_form_submission"),
+    path('api/applicant/<int:id>/', views.get_applicant, name="get_applicant"),
+    path('api/applicant/<int:id>/papers/', views.get_applicant_papers, name="get_applicant_papers"),  # New route
 ] 
 
 if settings.DEBUG:
