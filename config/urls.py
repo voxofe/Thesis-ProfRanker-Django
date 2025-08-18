@@ -17,15 +17,19 @@ Including another URLconf
 from django.conf import settings 
 from django.conf.urls.static import static 
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, re_path
 from app import views
 
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/submit/', views.handle_form_submission, name="handle_form_submission"),
-    path('api/applicant/<int:id>/', views.get_applicant, name="get_applicant"),
-    path('api/applicant/<int:id>/papers/', views.get_applicant_papers, name="get_applicant_papers"),  # New route
+    path('api/user/register', views.user_register, name='user_register'),
+    path('api/user/register-admin', views.user_register_admin, name='user_register_admin'),
+    path('api/user/login', views.user_login, name='user_login'),
+    path('api/users/getByToken', views.get_user_by_token, name='get_user_by_token'),
+    path('api/submit', views.handle_form_submission, name='handle_form_submission'),
+    path('api/applicant/<int:id>', views.get_applicant_score, name='get_applicant_score'),
+    path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
 ] 
 
 if settings.DEBUG:

@@ -4,7 +4,6 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-django = "*"
 django-cors-headers = "*"
 pandas = "*"
 requests = "*"
@@ -12,6 +11,8 @@ psycopg2-binary = "*"
 python-dotenv = "*"
 djangorestframework = "*"
 fastparquet = "*"
+pyjwt = "*"
+django = "*"
 
 [dev-packages]
 

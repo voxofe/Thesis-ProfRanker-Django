@@ -24,9 +24,17 @@ def get_sjr_quartile(year, issn):
         print(f"⚠️ Empty ISSN provided. Skipping ISSN search.")
         return None
 
+    def normalize_issn(issn):
+        return issn.replace("-", "").replace(" ", "").strip().upper()
+
+    def issn_match(row_issn, target_issn):
+        # Split on comma, normalize each, and check for match
+        issn_list = [normalize_issn(x) for x in str(row_issn).split(",")]
+        return normalize_issn(target_issn) in issn_list
+
     # Search for the ISSN
     print(f"🔎 Now searching for ISSN...")
-    result = df[df["issn"].str.contains(fr"\b{issn}\b", na=False, regex=True)]
+    result = df[df["issn"].apply(lambda x: issn_match(x, issn))]
 
     if result.empty:
         print(f"❌ ISSN '{issn}' not found in the '{year}' dataset.\n")

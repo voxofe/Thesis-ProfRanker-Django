@@ -1,14 +1,16 @@
 from rest_framework import serializers
-from .models import Paper, Application
+from .models import User, Application, Paper
 
-# Serializer for Paper
-class PaperSerializer(serializers.ModelSerializer):
+# Serializer for User
+class UserSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Paper
-        fields = ['type', 'paper_title', 'journal_conf_title', 'year', 'issn', 'country', 'quartile']
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'email', 'role']
 
 # Serializer for Application
 class ApplicationSerializer(serializers.ModelSerializer):
+    user = UserSerializer()
+
     class Meta:
         model = Application
         fields = '__all__'
@@ -31,3 +33,9 @@ class ApplicationSerializer(serializers.ModelSerializer):
             data[field] = file_obj.url if file_obj else None  # Ensure we return URL, not object
 
         return data
+
+# Serializer for Paper
+class PaperSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Paper
+        fields = ['type', 'paper_title', 'journal_conf_title', 'year', 'issn', 'country', 'quartile']
