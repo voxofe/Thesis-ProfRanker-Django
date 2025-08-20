@@ -37,7 +37,7 @@ def get_sjr_data(year):
         return None  
 
     try:
-        print(f"📑 Downloaded data in {execution_time:.4f} seconds. Now prosessing data...")
+        print(f"📑 Downloaded data in {execution_time:.4f} seconds. Now processing data...")
         df = pd.read_csv(
             BytesIO(response.content),
             sep=";",

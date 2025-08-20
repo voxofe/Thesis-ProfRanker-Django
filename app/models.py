@@ -24,7 +24,7 @@ class User(models.Model):
         return f"{self.first_name} {self.last_name} - {self.email} ({self.role})"
 
 class Application(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="application", null=True, blank=True)  # One-to-One Relationship
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="application", null=True, blank=True) 
     
     phd_title = models.CharField(max_length=255, blank=True, null=True)
     phd_acquisition_date = models.DateField( blank=True, null=True)
