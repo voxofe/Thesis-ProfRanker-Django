@@ -1,67 +1,91 @@
-# List of departments (τμήματα) at Πανεπιστήμιο Πατρών
+# -*- coding: utf-8 -*-
+"""
+Schools & Departments — Patras University
+The dict insertion order is preserved in Python 3.7+ 
+(so the order in the dropdowns is predictable).
+"""
 
-AEIFORIKIS_GEORGIA = "ΑΕΙΦΟΡΙΚΗΣ ΓΕΩΡΓΙΑΣ"
-ALIEIAS_KAI_YDATOKALLIERGEION = "ΑΛΙΕΙΑΣ ΚΑΙ ΥΔΑΤΟΚΑΛΛΙΕΡΓΕΙΩΝ"
-ARCHITEKTONON_MICHANIKON = "ΑΡΧΙΤΕΚΤΟΝΩΝ ΜΗΧΑΝΙΚΩΝ"
-BIOLOGIAS = "ΒΙΟΛΟΓΙΑΣ"
-GEOLOGIAS = "ΓΕΩΛΟΓΙΑΣ"
-GEOPONIAS = "ΓΕΩΠΟΝΙΑΣ"
-DIOIKISIS_EPIXEIRISEON = "ΔΙΟΙΚΗΣΗΣ ΕΠΙΧΕΙΡΗΣΕΩΝ"
-DIOIKISIS_TOURISMOY = "ΔΙΟΙΚΗΣΗΣ ΤΟΥΡΙΣΜΟΥ"
-DIOIKITIKIS_EPISTIMIS_KAI_TEXNOLOGIAS = "ΔΙΟΙΚΗΤΙΚΗΣ ΕΠΙΣΤΗΜΗΣ ΚΑΙ ΤΕΧΝΟΛΟΓΙΑΣ"
-EPISTIMIS_KAI_TEXNOLOGIAS_TROFIMON = "ΕΠΙΣΤΗΜΗΣ ΚΑΙ ΤΕΧΝΟΛΟΓΙΑΣ ΤΡΟΦΙΜΩΝ"
-EPISTIMIS_TON_YLIKON = "ΕΠΙΣΤΗΜΗΣ ΤΩΝ ΥΛΙΚΩΝ"
-EPISTIMON_TIS_EKPAIDEFSIS_KAI_AGOGIS_PROSXOLIKI = "ΕΠΙΣΤΗΜΩΝ ΤΗΣ ΕΚΠΑΙΔΕΥΣΗΣ ΚΑΙ ΑΓΩΓΗΣ ΣΤΗΝ ΠΡΟΣΧΟΛΙΚΗ ΗΛΙΚΙΑ"
-EPISTIMON_TIS_EKPAIDEFSIS_KAI_KOINONIKIS_ERGASIAS = "ΕΠΙΣΤΗΜΩΝ ΤΗΣ ΕΚΠΑΙΔΕΥΣΗΣ ΚΑΙ ΚΟΙΝΩΝΙΚΗΣ ΕΡΓΑΣΙΑΣ"
-ILEKTROLOGON_MICHANIKON_KAI_TEXNOLOGIAS_IPOLOGISTON = "ΗΛΕΚΤΡΟΛΟΓΩΝ ΜΗΧΑΝΙΚΩΝ & ΤΕΧΝΟΛΟΓΙΑΣ ΥΠΟΛΟΓΙΣΤΩΝ"
-THEATRIKON_SPOYDON = "ΘΕΑΤΡΙΚΩΝ ΣΠΟΥΔΩΝ"
-IATRIKIS = "ΙΑΤΡΙΚΗΣ"
-ISTORIAS_ARXAIOLOGIAS = "ΙΣΤΟΡΙΑΣ - ΑΡΧΑΙΟΛΟΓΙΑΣ"
-LOGOTHERAPIAS = "ΛΟΓΟΘΕΡΑΠΕΙΑΣ"
-MATHIMATIKON = "ΜΑΘΗΜΑΤΙΚΩΝ"
-MICHANIKON_HLEKTRONIKON_IPOLOGISTON_KAI_PLHROFORIKIS = "ΜΗΧΑΝΙΚΩΝ ΗΛΕΚΤΡΟΝΙΚΩΝ ΥΠΟΛΟΓΙΣΤΩΝ ΚΑΙ ΠΛΗΡΟΦΟΡΙΚΗΣ"
-MICHANOLOGON_KAI_AERONAYPIGON_MICHANIKON = "ΜΗΧΑΝΟΛΟΓΩΝ & ΑΕΡΟΝΑΥΠΗΓΩΝ ΜΗΧΑΝΙΚΩΝ"
-NOSILEYTIKIS = "ΝΟΣΗΛΕΥΤΙΚΗΣ"
-OIKONOMIKON_EPISTIMON = "ΟΙΚΟΝΟΜΙΚΩΝ ΕΠΙΣΤΗΜΩΝ"
-POLITIKON_MICHANIKON = "ΠΟΛΙΤΙΚΩΝ ΜΗΧΑΝΙΚΩΝ"
-FARMAKEYTIKIS = "ΦΑΡΜΑΚΕΥΤΙΚΗΣ"
-FILOLOGIAS = "ΦΙΛΟΛΟΓΙΑΣ"
-FILOSOFIAS = "ΦΙΛΟΣΟΦΙΑΣ"
-FYSIKIS = "ΦΥΣΙΚΗΣ"
-FYSIKOTHERAPIAS = "ΦΥΣΙΚΟΘΕΡΑΠΕΙΑΣ"
-CHIMIAS = "ΧΗΜΕΙΑΣ"
-CHIMIKON_MICHANIKON = "ΧΗΜΙΚΩΝ ΜΗΧΑΝΙΚΩΝ"
+from typing import Dict, List
 
-DEPARTMENTS = [
-    AEIFORIKIS_GEORGIA,
-    ALIEIAS_KAI_YDATOKALLIERGEION,
-    ARCHITEKTONON_MICHANIKON,
-    BIOLOGIAS,
-    GEOLOGIAS,
-    GEOPONIAS,
-    DIOIKISIS_EPIXEIRISEON,
-    DIOIKISIS_TOURISMOY,
-    DIOIKITIKIS_EPISTIMIS_KAI_TEXNOLOGIAS,
-    EPISTIMIS_KAI_TEXNOLOGIAS_TROFIMON,
-    EPISTIMIS_TON_YLIKON,
-    EPISTIMON_TIS_EKPAIDEFSIS_KAI_AGOGIS_PROSXOLIKI,
-    EPISTIMON_TIS_EKPAIDEFSIS_KAI_KOINONIKIS_ERGASIAS,
-    ILEKTROLOGON_MICHANIKON_KAI_TEXNOLOGIAS_IPOLOGISTON,
-    THEATRIKON_SPOYDON,
-    IATRIKIS,
-    ISTORIAS_ARXAIOLOGIAS,
-    LOGOTHERAPIAS,
-    MATHIMATIKON,
-    MICHANIKON_HLEKTRONIKON_IPOLOGISTON_KAI_PLHROFORIKIS,
-    MICHANOLOGON_KAI_AERONAYPIGON_MICHANIKON,
-    NOSILEYTIKIS,
-    OIKONOMIKON_EPISTIMON,
-    POLITIKON_MICHANIKON,
-    FARMAKEYTIKIS,
-    FILOLOGIAS,
-    FILOSOFIAS,
-    FYSIKIS,
-    FYSIKOTHERAPIAS,
-    CHIMIAS,
-    CHIMIKON_MICHANIKON,
+# Schools 
+SCHOOLS: List[str] = [
+    "ΘΕΤΙΚΩΝ ΕΠΙΣΤΗΜΩΝ",
+    "ΠΟΛΥΤΕΧΝΙΚΗ",
+    "ΕΠΙΣΤΗΜΩΝ ΥΓΕΙΑΣ",
+    "ΑΝΘΡΩΠΙΣΤΙΚΩΝ & ΚΟΙΝΩΝΙΚΩΝ ΕΠΙΣΤΗΜΩΝ",
+    "ΟΙΚΟΝΟΜΙΚΩΝ ΕΠΙΣΤΗΜΩΝ & ΔΙΟΙΚΗΣΗΣ",
+    "ΓΕΩΠΟΝΙΚΩΝ ΕΠΙΣΤΗΜΩΝ",
+    "ΕΠΙΣΤΗΜΩΝ ΑΠΟΚΑΤΑΣΤΑΣΗΣ ΥΓΕΙΑΣ",
 ]
+
+# Mapping: School -> [Departments]
+DEPARTMENTS_BY_SCHOOL: Dict[str, List[str]] = {
+    "ΘΕΤΙΚΩΝ ΕΠΙΣΤΗΜΩΝ": [
+        "ΒΙΟΛΟΓΙΑΣ",
+        "ΜΑΘΗΜΑΤΙΚΩΝ",
+        "ΓΕΩΛΟΓΙΑΣ",
+        "ΦΥΣΙΚΗΣ",
+        "ΕΠΙΣΤΗΜΗΣ ΤΩΝ ΥΛΙΚΩΝ",
+        "ΧΗΜΕΙΑΣ",
+    ],
+    "ΠΟΛΥΤΕΧΝΙΚΗ": [
+        "ΑΡΧΙΤΕΚΤΟΝΩΝ ΜΗΧΑΝΙΚΩΝ",
+        "ΜΗΧΑΝΟΛΟΓΩΝ & ΑΕΡΟΝΑΥΠΗΓΩΝ ΜΗΧΑΝΙΚΩΝ",
+        "ΗΛΕΚΤΡΟΛΟΓΩΝ ΜΗΧΑΝΙΚΩΝ & ΤΕΧΝΟΛΟΓΙΑΣ ΥΠΟΛΟΓΙΣΤΩΝ",
+        "ΠΟΛΙΤΙΚΩΝ ΜΗΧΑΝΙΚΩΝ",
+        "ΜΗΧΑΝΙΚΩΝ ΗΛΕΚΤΡΟΝΙΚΩΝ ΥΠΟΛΟΓΙΣΤΩΝ & ΠΛΗΡΟΦΟΡΙΚΗΣ",
+        "ΧΗΜΙΚΩΝ ΜΗΧΑΝΙΚΩΝ",
+    ],
+    "ΕΠΙΣΤΗΜΩΝ ΥΓΕΙΑΣ": [
+        "ΙΑΤΡΙΚΗΣ",
+        "ΦΑΡΜΑΚΕΥΤΙΚΗΣ",
+    ],
+    "ΑΝΘΡΩΠΙΣΤΙΚΩΝ & ΚΟΙΝΩΝΙΚΩΝ ΕΠΙΣΤΗΜΩΝ": [
+        "ΕΠΙΣΤΗΜΩΝ ΤΗΣ ΕΚΠΑΙΔΕΥΣΗΣ & ΚΟΙΝΩΝΙΚΗΣ ΕΡΓΑΣΙΑΣ",
+        "ΙΣΤΟΡΙΑΣ - ΑΡΧΑΙΟΛΟΓΙΑΣ",
+        "ΕΠΙΣΤΗΜΩΝ ΤΗΣ ΕΚΠΑΙΔΕΥΣΗΣ & ΑΓΩΓΗΣ ΣΤΗΝ ΠΡΟΣΧΟΛΙΚΗ ΗΛΙΚΙΑ",
+        "ΦΙΛΟΛΟΓΙΑΣ",
+        "ΘΕΑΤΡΙΚΩΝ ΣΠΟΥΔΩΝ",
+        "ΦΙΛΟΣΟΦΙΑΣ",
+    ],
+    "ΟΙΚΟΝΟΜΙΚΩΝ ΕΠΙΣΤΗΜΩΝ & ΔΙΟΙΚΗΣΗΣ": [
+        "ΔΙΟΙΚΗΣΗΣ ΕΠΙΧΕΙΡΗΣΕΩΝ",
+        "ΔΙΟΙΚΗΤΙΚΗΣ ΕΠΙΣΤΗΜΗΣ & ΤΕΧΝΟΛΟΓΙΑΣ",
+        "ΔΙΟΙΚΗΣΗΣ ΤΟΥΡΙΣΜΟΥ",
+        "ΟΙΚΟΝΟΜΙΚΩΝ ΕΠΙΣΤΗΜΩΝ",
+    ],
+    "ΓΕΩΠΟΝΙΚΩΝ ΕΠΙΣΤΗΜΩΝ": [
+        "ΓΕΩΠΟΝΙΑΣ",
+        "ΑΛΙΕΙΑΣ & ΥΔΑΤΟΚΑΛΛΙΕΡΓΕΙΩΝ",
+        "ΕΠΙΣΤΗΜΗΣ & ΤΕΧΝΟΛΟΓΙΑΣ ΤΡΟΦΙΜΩΝ",
+        "ΑΕΙΦΟΡΙΚΗΣ ΓΕΩΡΓΙΑΣ",
+    ],
+    "ΕΠΙΣΤΗΜΩΝ ΑΠΟΚΑΤΑΣΤΑΣΗΣ ΥΓΕΙΑΣ": [
+        "ΛΟΓΟΘΕΡΑΠΕΙΑΣ",
+        "ΝΟΣΗΛΕΥΤΙΚΗΣ",
+        "ΦΥΣΙΚΟΘΕΡΑΠΕΙΑΣ",
+    ],
+}
+
+# Derived structures (helpful for UI)
+
+# List of all departments (flat), ordered by school
+ALL_DEPARTMENTS: List[str] = [dp for sch in SCHOOLS for dp in DEPARTMENTS_BY_SCHOOL[sch]]
+
+# Reverse mapping: Department -> School (useful if you start from a department and want to pre-select a school)
+SCHOOL_BY_DEPARTMENT: Dict[str, str] = {
+    dp: sch for sch, dps in DEPARTMENTS_BY_SCHOOL.items() for dp in dps
+}
+
+# small helper functions
+def get_schools() -> List[str]:
+    """Returns the list of schools in the order they appear."""
+    return SCHOOLS
+
+def get_departments(school: str) -> List[str]:
+    """Returns the departments of a school (or an empty list if an unknown school is given)."""
+    return DEPARTMENTS_BY_SCHOOL.get(school, [])
+
+def get_school_of_department(department: str) -> str:
+    """Returns the school of a department (or an empty string if not found)."""
+    return SCHOOL_BY_DEPARTMENT.get(department, "")

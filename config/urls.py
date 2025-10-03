@@ -20,7 +20,6 @@ from django.contrib import admin
 from django.urls import path, re_path
 from app import views
 
-
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/user/register', views.user_register, name='user_register'),
@@ -30,7 +29,8 @@ urlpatterns = [
     path('api/submit', views.handle_form_submission, name='handle_form_submission'),
     path('api/applicant/<int:id>', views.get_applicant_score, name='get_applicant_score'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
-] 
+    path('api/positions', views.get_positions, name='get_positions'),
+]
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
