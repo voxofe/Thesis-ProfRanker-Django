@@ -6,7 +6,7 @@ from .serializers import ApplicationSerializer, PaperSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .models import Application, Paper, User
+from .models import Application, Paper, User, ScientificField, Course
 from .serializers import ApplicationSerializer, UserSerializer
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
@@ -466,6 +466,7 @@ def get_all_scores(request):
                 })
     return JsonResponse(result, safe=False)
 
+#Get Positions
 @api_view(['GET'])
 def get_positions(request):
     # Require Bearer token
@@ -509,3 +510,105 @@ def get_positions(request):
         for pos in positions
     ]
     return JsonResponse(data, safe=False)
+
+#Create Position
+@csrf_exempt
+@api_view(["POST"])
+def create_position(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token."}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user or user.role != "admin":
+        return JsonResponse({"error": "Only admins can create positions."}, status=403)
+
+    data = request.data
+    is_new_sci_field = data.get("isNewSciField") in [True, "true", "True", 1, "1"]
+    scientific_field_name = data.get("scientificField")
+    new_sci_field_name = data.get("newSciFieldName")
+    school = data.get("school")
+    department = data.get("department")
+    start_date = data.get("startDate")
+    end_date = data.get("endDate")
+    courses_json = data.get("courses", "[]")
+    try:
+        courses = json.loads(courses_json) if isinstance(courses_json, str) else courses_json
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid courses JSON."}, status=400)
+
+    if not school or school == "select":
+        return JsonResponse({"error": "School is required."}, status=400)
+    if not department or department == "select":
+        return JsonResponse({"error": "Department is required."}, status=400)
+    if not start_date:
+        return JsonResponse({"error": "Start date is required."}, status=400)
+    if not end_date:
+        return JsonResponse({"error": "End date is required."}, status=400)
+
+    try:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError:
+        return JsonResponse({"error": "Invalid date format."}, status=400)
+
+    if end_date_obj < start_date_obj:
+        return JsonResponse({"error": "End date cannot be earlier than start date."}, status=400)
+
+    if is_new_sci_field:
+        if not new_sci_field_name or not new_sci_field_name.strip():
+            return JsonResponse({"error": "New scientific field name is required."}, status=400)
+        if not isinstance(courses, list) or len(courses) == 0:
+            return JsonResponse({"error": "At least one course is required."}, status=400)
+
+        sci_field, _ = ScientificField.objects.get_or_create(
+            name=new_sci_field_name.strip(),
+            department=department,
+            school=school,
+        )
+    else:
+        if not scientific_field_name or scientific_field_name == "select":
+            return JsonResponse({"error": "Scientific field is required."}, status=400)
+        sci_field = ScientificField.objects.filter(
+            name=scientific_field_name, department=department, school=school
+        ).first()
+        if not sci_field:
+            return JsonResponse({"error": "Scientific field not found."}, status=404)
+
+    if hasattr(sci_field, "position"):
+        return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
+
+    if is_new_sci_field:
+        for course in courses:
+            Course.objects.create(
+                scientific_field=sci_field,
+                code=course.get("code"),
+                name=course.get("name"),
+                description=course.get("description"),
+                semester=course.get("semester"),
+                teaching_units=course.get("teaching_units"),
+                ects=course.get("ects"),
+                theory_hours=course.get("theory_hours"),
+                lab_hours=course.get("lab_hours"),
+                category=course.get("category"),
+            )
+
+    position = Position.objects.create(
+        scientific_field=sci_field,
+        start_date=start_date_obj,
+        end_date=end_date_obj,
+    )
+
+    return JsonResponse(
+        {
+            "message": "Position created successfully.",
+            "positionId": position.id,
+            "scientificFieldId": sci_field.id,
+        },
+        status=201,
+    )

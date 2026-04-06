@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/applicant/<int:id>', views.get_applicant_score, name='get_applicant_score'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
     path('api/positions', views.get_positions, name='get_positions'),
+    path('api/positions/create', views.create_position, name='create_position'),
 ]
 
 if settings.DEBUG:

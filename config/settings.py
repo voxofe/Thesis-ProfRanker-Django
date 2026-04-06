@@ -32,7 +32,12 @@ SECRET_KEY = 'django-insecure-b5lq#a(_8p^93kcn=+bz59shij(-vfiji@vn7n65yx1s2wzohk
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+ENV_ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").strip()
+if ENV_ALLOWED_HOSTS:
+    ALLOWED_HOSTS.extend(
+        [h.strip() for h in ENV_ALLOWED_HOSTS.split(",") if h.strip()]
+    )
 
 
 # Application definition
@@ -138,11 +143,14 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+CLIENT_URL = os.getenv("CLIENT_URL", "").strip()
+CLIENT_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+if CLIENT_URL and CLIENT_URL not in CLIENT_ORIGINS:
+    CLIENT_ORIGINS.append(CLIENT_URL)
+
+CORS_ALLOWED_ORIGINS = CLIENT_ORIGINS
+CSRF_TRUSTED_ORIGINS = CLIENT_ORIGINS
+
+print("CORS_ALLOWED_ORIGINS:", CORS_ALLOWED_ORIGINS)
+print("CSRF_TRUSTED_ORIGINS:", CSRF_TRUSTED_ORIGINS)
+

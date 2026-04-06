@@ -1,6 +1,8 @@
 import pandas as pd
 from .sjr_cache import get_sjr_data  
 
+# SJR Quartile Retrieval Logic
+
 def get_sjr_quartile(year, issn):
     
     df = get_sjr_data(year)
