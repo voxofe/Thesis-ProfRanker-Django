@@ -58,7 +58,6 @@ class Position(models.Model):
     scientific_field = models.OneToOneField(ScientificField, on_delete=models.CASCADE, related_name="position")
     start_date = models.DateField()
     end_date = models.DateField()
-    active = models.BooleanField(default=False)
 
     def __str__(self):
         return f"{self.scientific_field.name} ({self.start_date} - {self.end_date})"

@@ -478,7 +478,18 @@ def get_positions(request):
     if not payload:
         return JsonResponse({"error": "Invalid or expired token."}, status=401)
 
+    today = timezone.now().date()
     positions = Position.objects.all()
+
+    def compute_state(start_date, end_date):
+        if not start_date or not end_date:
+            return "pending"
+        if today < start_date:
+            return "pending"
+        if today > end_date:
+            return "completed"
+        return "active"
+
     data = [
         {
             "id": pos.id,
@@ -487,7 +498,7 @@ def get_positions(request):
             "school": get_school_of_department(pos.scientific_field.department),
             "startDate": pos.start_date,
             "endDate": pos.end_date,
-            "isActive": bool(pos.active),
+            "state": compute_state(pos.start_date, pos.end_date),
             "courses": [
                 {
                     "id": course.id,
@@ -581,19 +592,29 @@ def create_position(request):
         if not sci_field:
             return JsonResponse({"error": "Scientific field not found."}, status=404)
 
+    today = timezone.now().date()
+    def compute_state(start_date, end_date):
+        if not start_date or not end_date:
+            return "pending"
+        if today < start_date:
+            return "pending"
+        if today > end_date:
+            return "completed"
+        return "active"
+
     existing_position = getattr(sci_field, "position", None)
     if existing_position:
-        if existing_position.active:
+        if compute_state(existing_position.start_date, existing_position.end_date) == "active":
             return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
         existing_position.start_date = start_date_obj
         existing_position.end_date = end_date_obj
-        existing_position.active = True
-        existing_position.save(update_fields=["start_date", "end_date", "active"])
+        existing_position.save(update_fields=["start_date", "end_date"])
         return JsonResponse(
             {
                 "message": "Position updated successfully.",
                 "positionId": existing_position.id,
                 "scientificFieldId": sci_field.id,
+                "state": compute_state(existing_position.start_date, existing_position.end_date),
             },
             status=200,
         )
@@ -613,12 +634,10 @@ def create_position(request):
                 category=course.get("category"),
             )
 
-    today = timezone.now().date()
     position = Position.objects.create(
         scientific_field=sci_field,
         start_date=start_date_obj,
         end_date=end_date_obj,
-        active=bool(start_date_obj <= today <= end_date_obj),
     )
 
     return JsonResponse(
@@ -626,6 +645,7 @@ def create_position(request):
             "message": "Position created successfully.",
             "positionId": position.id,
             "scientificFieldId": sci_field.id,
+            "state": compute_state(position.start_date, position.end_date),
         },
         status=201,
     )
