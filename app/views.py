@@ -473,9 +473,11 @@ def get_all_scores(request):
                 })
     return JsonResponse(result, safe=False)
 
-#Get Positions
-@api_view(['GET'])
-def get_positions(request):
+# Scientific Fields collection (list + create)
+@csrf_exempt
+@api_view(["GET", "POST"])
+@parser_classes([MultiPartParser, FormParser])
+def scientific_fields_collection(request):
     # Require Bearer token
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -485,58 +487,91 @@ def get_positions(request):
     if not payload:
         return JsonResponse({"error": "Invalid or expired token."}, status=401)
 
-    tz = ZoneInfo("Europe/Athens")
-    now = timezone.now().astimezone(tz)
-    positions = Position.objects.all()
+    if request.method == "GET":
+        sfs = ScientificField.objects.all()
+        data = [
+            {
+                "id": sf.id,
+                "name": sf.name,
+                "department": sf.department,
+                "school": sf.school,
+                "courses": [
+                    {
+                        "id": course.id,
+                        "name": course.name,
+                        "code": course.code,
+                        "description": course.description,
+                        "semester": course.semester,
+                        "teachingUnits": course.teaching_units,
+                        "ects": course.ects,
+                        "theory_hours": course.theory_hours,
+                        "lab_hours": course.lab_hours,
+                        "category": course.category,
+                    }
+                    for course in sf.courses.all()
+                ]
+            }
+            for sf in sfs
+        ]
+        return JsonResponse(data, safe=False)
 
-    def compute_state(start_date, end_date, start_time, end_time):
-        if not start_date or not end_date:
-            return "pending"
-        start_t = start_time or dt_time(0, 0)
-        end_t = end_time or dt_time(23, 59)
-        start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
-        end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
-        if now < start_dt:
-            return "pending"
-        if now > end_dt:
-            return "completed"
-        return "active"
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user or user.role != "admin":
+        return JsonResponse({"error": "Only admins can create scientific fields."}, status=403)
 
-    data = [
+    data = request.data
+    name = data.get("name")
+    school = data.get("school")
+    department = data.get("department")
+    courses_json = data.get("courses", "[]")
+    try:
+        courses = json.loads(courses_json) if isinstance(courses_json, str) else courses_json
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid courses JSON."}, status=400)
+
+    if not name or not str(name).strip():
+        return JsonResponse({"error": "Scientific field name is required."}, status=400)
+    if not school or school == "select":
+        return JsonResponse({"error": "School is required."}, status=400)
+    if not department or department == "select":
+        return JsonResponse({"error": "Department is required."}, status=400)
+    if not isinstance(courses, list) or len(courses) == 0:
+        return JsonResponse({"error": "At least one course is required."}, status=400)
+
+    sci_field = ScientificField.objects.create(
+        name=str(name).strip(),
+        department=department,
+        school=school,
+    )
+
+    for course in courses:
+        Course.objects.create(
+            scientific_field=sci_field,
+            code=course.get("code"),
+            name=course.get("name"),
+            description=course.get("description"),
+            semester=course.get("semester"),
+            teaching_units=course.get("teaching_units"),
+            ects=course.get("ects"),
+            theory_hours=course.get("theory_hours"),
+            lab_hours=course.get("lab_hours"),
+            category=course.get("category"),
+        )
+
+    return JsonResponse(
         {
-            "id": pos.id,
-            "scientificField": pos.scientific_field.name,
-            "department": pos.scientific_field.department,
-            "school": get_school_of_department(pos.scientific_field.department),
-            "startDate": pos.start_date,
-            "endDate": pos.end_date,
-            "startTime": pos.start_time.strftime("%H:%M") if pos.start_time else None,
-            "endTime": pos.end_time.strftime("%H:%M") if pos.end_time else None,
-            "state": compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time),
-            "courses": [
-                {
-                    "id": course.id,
-                    "name": course.name,
-                    "code": course.code,
-                    "description": course.description,
-                    "semester": course.semester,
-                    "teachingUnits": course.teaching_units,
-                    "ects": course.ects,
-                    "theory_hours": course.theory_hours,
-                    "lab_hours": course.lab_hours,
-                    "category": course.category,
-                }
-                for course in pos.scientific_field.courses.all()
-            ]
-        }
-        for pos in positions
-    ]
-    return JsonResponse(data, safe=False)
+            "message": "Scientific field created successfully.",
+            "scientificFieldId": sci_field.id,
+        },
+        status=201,
+    )
 
-#Create Position
+# Positions collection (list + create)
 @csrf_exempt
-@api_view(["POST"])
-def create_position(request):
+@api_view(["GET", "POST"])
+@parser_classes([MultiPartParser, FormParser])
+def positions_collection(request):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return JsonResponse({"error": "Authorization token missing."}, status=401)
@@ -545,29 +580,68 @@ def create_position(request):
     payload = decode_jwt(token)
     if not payload:
         return JsonResponse({"error": "Invalid or expired token."}, status=401)
+    if request.method == "GET":
+        tz = ZoneInfo("Europe/Athens")
+        now = timezone.now().astimezone(tz)
+        positions = Position.objects.all()
+
+        def compute_state(start_date, end_date, start_time, end_time):
+            if not start_date or not end_date:
+                return "pending"
+            start_t = start_time or dt_time(0, 0)
+            end_t = end_time or dt_time(23, 59)
+            start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+            end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+            if now < start_dt:
+                return "pending"
+            if now > end_dt:
+                return "completed"
+            return "active"
+
+        data = [
+            {
+                "id": pos.id,
+                "scientificFieldId": pos.scientific_field.id,
+                "scientificField": pos.scientific_field.name,
+                "department": pos.scientific_field.department,
+                "school": pos.scientific_field.school,
+                "startDate": pos.start_date,
+                "endDate": pos.end_date,
+                "startTime": pos.start_time.strftime("%H:%M") if pos.start_time else None,
+                "endTime": pos.end_time.strftime("%H:%M") if pos.end_time else None,
+                "state": compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time),
+                "courses": [
+                    {
+                        "id": course.id,
+                        "name": course.name,
+                        "code": course.code,
+                        "description": course.description,
+                        "semester": course.semester,
+                        "teachingUnits": course.teaching_units,
+                        "ects": course.ects,
+                        "theory_hours": course.theory_hours,
+                        "lab_hours": course.lab_hours,
+                        "category": course.category,
+                    }
+                    for course in pos.scientific_field.courses.all()
+                ]
+            }
+            for pos in positions
+        ]
+        return JsonResponse(data, safe=False)
+
     user_id = payload.get("user_id")
     user = User.objects.filter(id=user_id).first()
     if not user or user.role != "admin":
         return JsonResponse({"error": "Only admins can create positions."}, status=403)
 
     data = request.data
-    is_new_sci_field = data.get("isNewSciField") in [True, "true", "True", 1, "1"]
-    scientific_field_name = data.get("scientificField")
-    new_sci_field_name = data.get("newSciFieldName")
-    school = data.get("school")
-    department = data.get("department")
+    scientific_field_id = data.get("scientificFieldId")
     start_date = data.get("startDate")
     end_date = data.get("endDate")
-    courses_json = data.get("courses", "[]")
-    try:
-        courses = json.loads(courses_json) if isinstance(courses_json, str) else courses_json
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid courses JSON."}, status=400)
 
-    if not school or school == "select":
-        return JsonResponse({"error": "School is required."}, status=400)
-    if not department or department == "select":
-        return JsonResponse({"error": "Department is required."}, status=400)
+    if not scientific_field_id:
+        return JsonResponse({"error": "Scientific field id is required."}, status=400)
     if not start_date:
         return JsonResponse({"error": "Start date is required."}, status=400)
     if not end_date:
@@ -602,29 +676,9 @@ def create_position(request):
     if end_dt < start_dt:
         return JsonResponse({"error": "End date cannot be earlier than start date."}, status=400)
 
-    if is_new_sci_field:
-        if not new_sci_field_name or not new_sci_field_name.strip():
-            return JsonResponse({"error": "New scientific field name is required."}, status=400)
-        if not isinstance(courses, list) or len(courses) == 0:
-            return JsonResponse({"error": "At least one course is required."}, status=400)
-
-        sci_field, _ = ScientificField.objects.get_or_create(
-            name=new_sci_field_name.strip(),
-            department=department,
-            school=school,
-        )
-    else:
-        if not scientific_field_name or scientific_field_name == "select":
-            return JsonResponse({"error": "Scientific field is required."}, status=400)
-        sci_field = ScientificField.objects.filter(
-            name=scientific_field_name, department=department, school=school
-        ).first()
-        if not sci_field:
-            sci_field = ScientificField.objects.filter(
-                name=scientific_field_name, department=department
-            ).first()
-        if not sci_field:
-            return JsonResponse({"error": "Scientific field not found."}, status=404)
+    sci_field = ScientificField.objects.filter(id=scientific_field_id).first()
+    if not sci_field:
+        return JsonResponse({"error": "Scientific field not found."}, status=404)
 
     now = timezone.now().astimezone(tz)
     def compute_state(start_date, end_date, start_time, end_time):
@@ -642,47 +696,7 @@ def create_position(request):
 
     existing_position = getattr(sci_field, "position", None)
     if existing_position:
-        if compute_state(
-            existing_position.start_date,
-            existing_position.end_date,
-            existing_position.start_time,
-            existing_position.end_time,
-        ) == "active":
-            return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
-        existing_position.start_date = start_date_obj
-        existing_position.end_date = end_date_obj
-        existing_position.start_time = start_time_obj
-        existing_position.end_time = end_time_obj
-        existing_position.save(update_fields=["start_date", "end_date", "start_time", "end_time"])
-        return JsonResponse(
-            {
-                "message": "Position updated successfully.",
-                "positionId": existing_position.id,
-                "scientificFieldId": sci_field.id,
-                "state": compute_state(
-                    existing_position.start_date,
-                    existing_position.end_date,
-                    existing_position.start_time,
-                    existing_position.end_time,
-                ),
-            },
-            status=200,
-        )
-
-    if is_new_sci_field:
-        for course in courses:
-            Course.objects.create(
-                scientific_field=sci_field,
-                code=course.get("code"),
-                name=course.get("name"),
-                description=course.get("description"),
-                semester=course.get("semester"),
-                teaching_units=course.get("teaching_units"),
-                ects=course.get("ects"),
-                theory_hours=course.get("theory_hours"),
-                lab_hours=course.get("lab_hours"),
-                category=course.get("category"),
-            )
+        return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
 
     position = Position.objects.create(
         scientific_field=sci_field,
