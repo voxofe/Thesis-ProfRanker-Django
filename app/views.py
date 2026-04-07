@@ -12,8 +12,9 @@ from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 import time
 import json
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from django.utils import timezone
+from zoneinfo import ZoneInfo
 from rest_framework.response import Response
 from .models import Position
 from app.constants.departments import get_school_of_department
@@ -437,15 +438,21 @@ def get_all_scores(request):
 
     applicants = User.objects.filter(role="applicant")
     result = []
-    today = timezone.now().date()
+    tz = ZoneInfo("Europe/Athens")
+    now = timezone.now().astimezone(tz)
     for user in applicants:
         app = getattr(user, "application", None)
         if app:
             # Only include if admin, or if position end_date has passed
             include = True
             if user_role in ["applicant", "guest"]:
-                if not app.position or not app.position.end_date or app.position.end_date >= today:
+                if not app.position or not app.position.end_date:
                     include = False
+                else:
+                    end_t = app.position.end_time or dt_time(23, 59)
+                    end_dt = datetime.combine(app.position.end_date, end_t, tzinfo=tz)
+                    if end_dt >= now:
+                        include = False
             if include:
                 # Format submitDate as "day-month-year hh:mm"
                 if hasattr(app, "submitted_at") and app.submitted_at:
@@ -478,15 +485,20 @@ def get_positions(request):
     if not payload:
         return JsonResponse({"error": "Invalid or expired token."}, status=401)
 
-    today = timezone.now().date()
+    tz = ZoneInfo("Europe/Athens")
+    now = timezone.now().astimezone(tz)
     positions = Position.objects.all()
 
-    def compute_state(start_date, end_date):
+    def compute_state(start_date, end_date, start_time, end_time):
         if not start_date or not end_date:
             return "pending"
-        if today < start_date:
+        start_t = start_time or dt_time(0, 0)
+        end_t = end_time or dt_time(23, 59)
+        start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+        end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+        if now < start_dt:
             return "pending"
-        if today > end_date:
+        if now > end_dt:
             return "completed"
         return "active"
 
@@ -498,7 +510,9 @@ def get_positions(request):
             "school": get_school_of_department(pos.scientific_field.department),
             "startDate": pos.start_date,
             "endDate": pos.end_date,
-            "state": compute_state(pos.start_date, pos.end_date),
+            "startTime": pos.start_time.strftime("%H:%M") if pos.start_time else None,
+            "endTime": pos.end_time.strftime("%H:%M") if pos.end_time else None,
+            "state": compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time),
             "courses": [
                 {
                     "id": course.id,
@@ -559,13 +573,33 @@ def create_position(request):
     if not end_date:
         return JsonResponse({"error": "End date is required."}, status=400)
 
+    start_time_raw = data.get("startTime")
+    end_time_raw = data.get("endTime")
+
     try:
         start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
         end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
     except ValueError:
         return JsonResponse({"error": "Invalid date format."}, status=400)
 
-    if end_date_obj < start_date_obj:
+    def parse_time(value, default_value):
+        if value in [None, "", "null"]:
+            return default_value
+        try:
+            return datetime.strptime(value, "%H:%M").time()
+        except ValueError:
+            return None
+
+    start_time_obj = parse_time(start_time_raw, dt_time(0, 0))
+    end_time_obj = parse_time(end_time_raw, dt_time(23, 59))
+    if start_time_obj is None or end_time_obj is None:
+        return JsonResponse({"error": "Invalid time format."}, status=400)
+
+    tz = ZoneInfo("Europe/Athens")
+    start_dt = datetime.combine(start_date_obj, start_time_obj, tzinfo=tz)
+    end_dt = datetime.combine(end_date_obj, end_time_obj, tzinfo=tz)
+
+    if end_dt < start_dt:
         return JsonResponse({"error": "End date cannot be earlier than start date."}, status=400)
 
     if is_new_sci_field:
@@ -592,29 +626,45 @@ def create_position(request):
         if not sci_field:
             return JsonResponse({"error": "Scientific field not found."}, status=404)
 
-    today = timezone.now().date()
-    def compute_state(start_date, end_date):
+    now = timezone.now().astimezone(tz)
+    def compute_state(start_date, end_date, start_time, end_time):
         if not start_date or not end_date:
             return "pending"
-        if today < start_date:
+        start_t = start_time or dt_time(0, 0)
+        end_t = end_time or dt_time(23, 59)
+        start_dt_local = datetime.combine(start_date, start_t, tzinfo=tz)
+        end_dt_local = datetime.combine(end_date, end_t, tzinfo=tz)
+        if now < start_dt_local:
             return "pending"
-        if today > end_date:
+        if now > end_dt_local:
             return "completed"
         return "active"
 
     existing_position = getattr(sci_field, "position", None)
     if existing_position:
-        if compute_state(existing_position.start_date, existing_position.end_date) == "active":
+        if compute_state(
+            existing_position.start_date,
+            existing_position.end_date,
+            existing_position.start_time,
+            existing_position.end_time,
+        ) == "active":
             return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
         existing_position.start_date = start_date_obj
         existing_position.end_date = end_date_obj
-        existing_position.save(update_fields=["start_date", "end_date"])
+        existing_position.start_time = start_time_obj
+        existing_position.end_time = end_time_obj
+        existing_position.save(update_fields=["start_date", "end_date", "start_time", "end_time"])
         return JsonResponse(
             {
                 "message": "Position updated successfully.",
                 "positionId": existing_position.id,
                 "scientificFieldId": sci_field.id,
-                "state": compute_state(existing_position.start_date, existing_position.end_date),
+                "state": compute_state(
+                    existing_position.start_date,
+                    existing_position.end_date,
+                    existing_position.start_time,
+                    existing_position.end_time,
+                ),
             },
             status=200,
         )
@@ -638,6 +688,8 @@ def create_position(request):
         scientific_field=sci_field,
         start_date=start_date_obj,
         end_date=end_date_obj,
+        start_time=start_time_obj,
+        end_time=end_time_obj,
     )
 
     return JsonResponse(
@@ -645,7 +697,12 @@ def create_position(request):
             "message": "Position created successfully.",
             "positionId": position.id,
             "scientificFieldId": sci_field.id,
-            "state": compute_state(position.start_date, position.end_date),
+            "state": compute_state(
+                position.start_date,
+                position.end_date,
+                position.start_time,
+                position.end_time,
+            ),
         },
         status=201,
     )

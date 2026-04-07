@@ -1,4 +1,5 @@
 from django.db import models
+from datetime import time as dt_time
 from django.contrib.auth.hashers import make_password, check_password
 
 class User(models.Model):
@@ -58,6 +59,8 @@ class Position(models.Model):
     scientific_field = models.OneToOneField(ScientificField, on_delete=models.CASCADE, related_name="position")
     start_date = models.DateField()
     end_date = models.DateField()
+    start_time = models.TimeField(default=dt_time(0, 0))
+    end_time = models.TimeField(default=dt_time(23, 59))
 
     def __str__(self):
         return f"{self.scientific_field.name} ({self.start_date} - {self.end_date})"
