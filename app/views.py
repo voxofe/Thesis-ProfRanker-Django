@@ -375,6 +375,14 @@ def get_applicant_score(request, id):
     user = application.user
     sf = application.position.scientific_field if application.position else None
 
+    def file_info(file_field):
+        if not file_field:
+            return {"url": None, "name": None}
+        return {
+            "url": request.build_absolute_uri(file_field.url),
+            "name": file_field.name.split("/")[-1],
+        }
+
     data = {
         "id": user.id,
         "firstName": user.first_name,
@@ -426,6 +434,13 @@ def get_applicant_score(request, id):
         "positionEndDate": application.position.end_date.strftime("%d-%m-%Y") if application.position and application.position.end_date else "",
         "positionStartTime": application.position.start_time.strftime("%H:%M") if application.position and application.position.start_time else "",
         "positionEndTime": application.position.end_time.strftime("%H:%M") if application.position and application.position.end_time else "",
+        "documents": {
+            "cv": file_info(application.cv_document),
+            "phd": file_info(application.phd_document),
+            "doatap": file_info(application.doatap_document),
+            "coursePlan": file_info(application.course_plan_document),
+            "military": file_info(application.military_obligations_document),
+        },
     }
     return JsonResponse(data, safe=False)
 
