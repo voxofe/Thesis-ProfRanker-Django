@@ -28,15 +28,20 @@ def user_register(request):
     last_name = data.get("lastName")
     email = data.get("email")
     password = data.get("password")
+    gender = data.get("gender")
 
     if User.objects.filter(email=email).exists():
         return JsonResponse({"error": "Email already registered."}, status=400)
+
+    if gender not in {"male", "female"}:
+        return JsonResponse({"error": "Gender is required."}, status=400)
 
     user = User(
         first_name=first_name,
         last_name=last_name,
         email=email,
-        role="guest"
+        role="guest",
+        gender=gender,
     )
     user.set_password(password)
     user.save()
@@ -123,6 +128,7 @@ def get_user_by_token(request):
         "lastName": user.last_name,
         "email": user.email,
         "role": user.role,
+        "gender": user.gender,
     }
 
     def get_filename(filefield):
@@ -415,9 +421,11 @@ def get_applicant_score(request, id):
             }
             for paper in application.papers.all()
         ],
-        "submitDate": application.submitted_at.strftime("%d-%m-%Y %H:%M") if application.submitted_at else "",
+        "submitDate": timezone.localtime(application.submitted_at, ZoneInfo("Europe/Athens")).strftime("%d-%m-%Y %H:%M") if application.submitted_at else "",
         "positionStartDate": application.position.start_date.strftime("%d-%m-%Y") if application.position and application.position.start_date else "",
         "positionEndDate": application.position.end_date.strftime("%d-%m-%Y") if application.position and application.position.end_date else "",
+        "positionStartTime": application.position.start_time.strftime("%H:%M") if application.position and application.position.start_time else "",
+        "positionEndTime": application.position.end_time.strftime("%H:%M") if application.position and application.position.end_time else "",
     }
     return JsonResponse(data, safe=False)
 
@@ -456,11 +464,12 @@ def get_all_scores(request):
             if include:
                 # Format submitDate as "day-month-year hh:mm"
                 if hasattr(app, "submitted_at") and app.submitted_at:
-                    submit_date = app.submitted_at.strftime("%d-%m-%Y %H:%M")
+                    submit_date = timezone.localtime(app.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
                 else:
                     submit_date = ""
                 result.append({
                     "id": user.id,
+                    "applicationId": app.id,
                     "firstName": user.first_name,
                     "lastName": user.last_name,
                     "school": get_school_of_department(app.position.scientific_field.department),
@@ -469,6 +478,8 @@ def get_all_scores(request):
                     "submitDate": submit_date,
                     "positionStartDate": app.position.start_date.strftime("%d-%m-%Y") if app.position and app.position.start_date else "",
                     "positionEndDate": app.position.end_date.strftime("%d-%m-%Y") if app.position and app.position.end_date else "",
+                    "positionStartTime": app.position.start_time.strftime("%H:%M") if app.position and app.position.start_time else "",
+                    "positionEndTime": app.position.end_time.strftime("%H:%M") if app.position and app.position.end_time else "",
                     "totalPoints": app.total_points,
                 })
     return JsonResponse(result, safe=False)
@@ -476,7 +487,6 @@ def get_all_scores(request):
 # Scientific Fields collection (list + create)
 @csrf_exempt
 @api_view(["GET", "POST"])
-@parser_classes([MultiPartParser, FormParser])
 def scientific_fields_collection(request):
     # Require Bearer token
     auth_header = request.headers.get("Authorization")
@@ -489,6 +499,31 @@ def scientific_fields_collection(request):
 
     if request.method == "GET":
         sfs = ScientificField.objects.all()
+        available_for_position = request.query_params.get("availableForPosition")
+        if available_for_position and str(available_for_position).lower() in {"1", "true", "yes"}:
+            tz = ZoneInfo("Europe/Athens")
+            now = timezone.now().astimezone(tz)
+
+            def compute_state(start_date, end_date, start_time, end_time):
+                if not start_date or not end_date:
+                    return "pending"
+                start_t = start_time or dt_time(0, 0)
+                end_t = end_time or dt_time(23, 59)
+                start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+                end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+                if now < start_dt:
+                    return "pending"
+                if now > end_dt:
+                    return "completed"
+                return "active"
+
+            def is_available(sf):
+                pos = getattr(sf, "position", None)
+                if not pos:
+                    return True
+                return compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time) == "completed"
+
+            sfs = [sf for sf in sfs if is_available(sf)]
         data = [
             {
                 "id": sf.id,
@@ -570,7 +605,6 @@ def scientific_fields_collection(request):
 # Positions collection (list + create)
 @csrf_exempt
 @api_view(["GET", "POST"])
-@parser_classes([MultiPartParser, FormParser])
 def positions_collection(request):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -636,6 +670,7 @@ def positions_collection(request):
         return JsonResponse({"error": "Only admins can create positions."}, status=403)
 
     data = request.data
+    position_id = data.get("positionId")
     scientific_field_id = data.get("scientificFieldId")
     start_date = data.get("startDate")
     end_date = data.get("endDate")
@@ -693,6 +728,38 @@ def positions_collection(request):
         if now > end_dt_local:
             return "completed"
         return "active"
+
+    if position_id:
+        position = Position.objects.filter(id=position_id).first()
+        if not position:
+            return JsonResponse({"error": "Position not found."}, status=404)
+
+        if position.scientific_field_id != sci_field.id:
+            existing_position = getattr(sci_field, "position", None)
+            if existing_position and existing_position.id != position.id:
+                return JsonResponse({"error": "Position already exists for this scientific field."}, status=409)
+            position.scientific_field = sci_field
+
+        position.start_date = start_date_obj
+        position.end_date = end_date_obj
+        position.start_time = start_time_obj
+        position.end_time = end_time_obj
+        position.save(update_fields=["scientific_field", "start_date", "end_date", "start_time", "end_time"])
+
+        return JsonResponse(
+            {
+                "message": "Position updated successfully.",
+                "positionId": position.id,
+                "scientificFieldId": sci_field.id,
+                "state": compute_state(
+                    position.start_date,
+                    position.end_date,
+                    position.start_time,
+                    position.end_time,
+                ),
+            },
+            status=200,
+        )
 
     existing_position = getattr(sci_field, "position", None)
     if existing_position:

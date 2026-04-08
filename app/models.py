@@ -8,10 +8,15 @@ class User(models.Model):
         ('applicant', 'Applicant'),
         ('guest', 'Guest'),
     ]
+    GENDERS = [
+        ('male', 'Male'),
+        ('female', 'Female'),
+    ]
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=10, choices=ROLES)
+    gender = models.CharField(max_length=6, choices=GENDERS, blank=True, null=True)
     password = models.CharField(max_length=128)  # Store hashed password
 
     def set_password(self, raw_password):
