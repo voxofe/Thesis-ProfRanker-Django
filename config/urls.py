@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/users/getByToken', views.get_user_by_token, name='get_user_by_token'),
     path('api/submit', views.handle_form_submission, name='handle_form_submission'),
     path('api/applicant/<int:id>', views.get_applicant_score, name='get_applicant_score'),
+    path('api/applicant/<int:id>/documents/<str:doc_key>', views.download_applicant_document, name='download_applicant_document'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
     path('api/scientific-fields', views.scientific_fields_collection, name='scientific_fields_collection'),
     path('api/positions', views.positions_collection, name='positions_collection')

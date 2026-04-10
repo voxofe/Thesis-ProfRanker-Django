@@ -1,4 +1,4 @@
-from django.http import JsonResponse
+from django.http import JsonResponse, FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from rest_framework.response import Response
 from .models import Position
 from app.constants.departments import get_school_of_department
+import os
 
 # Register
 @csrf_exempt
@@ -375,12 +376,14 @@ def get_applicant_score(request, id):
     user = application.user
     sf = application.position.scientific_field if application.position else None
 
-    def file_info(file_field):
+    def file_info(file_field, key):
         if not file_field:
-            return {"url": None, "name": None}
+            return {"url": None, "name": None, "downloadPath": None}
+        download_path = f"/api/applicant/{id}/documents/{key}"
         return {
             "url": request.build_absolute_uri(file_field.url),
             "name": file_field.name.split("/")[-1],
+            "downloadPath": download_path,
         }
 
     data = {
@@ -435,14 +438,53 @@ def get_applicant_score(request, id):
         "positionStartTime": application.position.start_time.strftime("%H:%M") if application.position and application.position.start_time else "",
         "positionEndTime": application.position.end_time.strftime("%H:%M") if application.position and application.position.end_time else "",
         "documents": {
-            "cv": file_info(application.cv_document),
-            "phd": file_info(application.phd_document),
-            "doatap": file_info(application.doatap_document),
-            "coursePlan": file_info(application.course_plan_document),
-            "military": file_info(application.military_obligations_document),
+            "cv": file_info(application.cv_document, "cv"),
+            "phd": file_info(application.phd_document, "phd"),
+            "doatap": file_info(application.doatap_document, "doatap"),
+            "coursePlan": file_info(application.course_plan_document, "coursePlan"),
+            "military": file_info(application.military_obligations_document, "military"),
         },
     }
     return JsonResponse(data, safe=False)
+
+
+@api_view(["GET"])
+def download_applicant_document(request, id, doc_key):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    requesting_user = User.objects.filter(id=user_id).first()
+    if not requesting_user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    if requesting_user.role != "admin" and requesting_user.id != id:
+        return JsonResponse({"error": "Forbidden."}, status=403)
+
+    application = get_object_or_404(Application, user__id=id)
+    document_map = {
+        "cv": application.cv_document,
+        "phd": application.phd_document,
+        "doatap": application.doatap_document,
+        "coursePlan": application.course_plan_document,
+        "military": application.military_obligations_document,
+    }
+
+    file_field = document_map.get(doc_key)
+    if not file_field:
+        return JsonResponse({"error": "Document not found."}, status=404)
+    if not file_field.name:
+        return JsonResponse({"error": "Document not available."}, status=404)
+
+    filename = os.path.basename(file_field.name)
+    response = FileResponse(file_field.open("rb"), as_attachment=True, filename=filename)
+    response["Content-Type"] = "application/octet-stream"
+    return response
 
 # Get All Scores
 @api_view(["GET"])
