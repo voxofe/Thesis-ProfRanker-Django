@@ -117,7 +117,6 @@ class Application(models.Model):
     doatap_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     course_plan_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     military_obligations_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    employment_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     public_employee_permission_document = models.FileField(upload_to="documents/", blank=True, null=True, max_length=255)
     not_participated_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     eu_citizen_greek_language_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
@@ -136,6 +135,17 @@ class Application(models.Model):
 
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} - {self.user.email}"
+
+class EmploymentCertificate(models.Model):
+    application = models.ForeignKey(
+        Application,
+        on_delete=models.CASCADE,
+        related_name="employment_certificates",
+    )
+    file = models.FileField(upload_to="documents/", max_length=255)
+
+    def __str__(self):
+        return f"Employment certificate #{self.id} for application {self.application_id}"
 
 class Paper(models.Model):
     application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name="papers")  # One-to-Many Relationship

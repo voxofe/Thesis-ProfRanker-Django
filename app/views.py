@@ -1,13 +1,12 @@
-from django.http import JsonResponse, FileResponse, HttpResponse
+from django.http import JsonResponse, FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
-from .serializers import ApplicationSerializer, PaperSerializer
+from .serializers import ApplicationSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .models import Application, Paper, User, ScientificField, Course, UserProfile
-from .serializers import ApplicationSerializer, UserSerializer
+from .models import Application, Paper, User, Position, ScientificField, Course, UserProfile, EmploymentCertificate
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 import time
@@ -15,8 +14,6 @@ import json
 from datetime import datetime, time as dt_time
 from django.utils import timezone
 from zoneinfo import ZoneInfo
-from rest_framework.response import Response
-from .models import Position
 from app.constants.departments import get_school_of_department
 import os
 
@@ -165,7 +162,13 @@ def get_user_by_token(request):
             "doatapDocument": get_filename(app.doatap_document),
             "coursePlanDocument": get_filename(app.course_plan_document),
             "militaryObligationsDocument": get_filename(app.military_obligations_document),
-            "employmentCertificateDocument": get_filename(app.employment_certificate_document),
+            "employmentCertificates": [
+                {
+                    "id": cert.id,
+                    "name": get_filename(cert.file),
+                }
+                for cert in app.employment_certificates.all()
+            ],
             "publicEmployeePermissionDocument": get_filename(app.public_employee_permission_document),
             "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
             "euCitizenGreekLanguageCertificateDocument": get_filename(app.eu_citizen_greek_language_certificate_document),
@@ -481,13 +484,28 @@ def handle_form_submission(request):
             handle_file("doatap_document", request.FILES.get("doatapDocument"))
             handle_file("course_plan_document", request.FILES.get("coursePlanDocument"))
             handle_file("military_obligations_document", request.FILES.get("militaryObligationsDocument"))
-            handle_file("employment_certificate_document", request.FILES.get("employmentCertificateDocument"))
             handle_file("public_employee_permission_document", request.FILES.get("publicEmployeePermissionDocument"))
             handle_file("not_participated_declaration_document", request.FILES.get("notParticipatedDeclarationDocument"))
             handle_file("eu_citizen_greek_language_certificate_document", request.FILES.get("euCitizenGreekLanguageCertificateDocument"))
             handle_file("responsible_declaration_document", request.FILES.get("responsibleDeclarationDocument"))
 
             application.save()
+
+            employment_certificate_files = request.FILES.getlist("employmentCertificateDocuments")
+            should_replace_employment_certificates = bool(employment_certificate_files)
+
+            if should_replace_employment_certificates:
+                for cert in application.employment_certificates.all():
+                    if cert.file:
+                        cert.file.delete(save=False)
+                    cert.delete()
+
+                for cert_file in employment_certificate_files:
+                    if cert_file:
+                        EmploymentCertificate.objects.create(
+                            application=application,
+                            file=cert_file,
+                        )
 
             # --- Papers resubmission logic ---
             # Build a dict of existing papers for quick lookup
@@ -677,7 +695,16 @@ def get_applicant_score(request, id):
             "doatap": file_info(application.doatap_document, "doatap"),
             "coursePlan": file_info(application.course_plan_document, "coursePlan"),
             "military": file_info(application.military_obligations_document, "military"),
-            "employmentCertificate": file_info(application.employment_certificate_document, "employmentCertificate"),
+            "employmentCertificates": [
+                {
+                    "id": cert.id,
+                    "url": request.build_absolute_uri(cert.file.url),
+                    "name": cert.file.name.split("/")[-1] if cert.file else None,
+                    "downloadPath": f"/api/applicant/{id}/employment-certificates/{cert.id}",
+                }
+                for cert in application.employment_certificates.all()
+                if cert.file
+            ],
             "publicEmployeePermission": file_info(application.public_employee_permission_document, "publicEmployeePermission"),
             "notParticipatedDeclaration": file_info(application.not_participated_declaration_document, "notParticipatedDeclaration"),
             "euCitizenGreekLanguageCertificate": file_info(application.eu_citizen_greek_language_certificate_document, "euCitizenGreekLanguageCertificate"),
@@ -712,7 +739,11 @@ def download_applicant_document(request, id, doc_key):
         "doatap": application.doatap_document,
         "coursePlan": application.course_plan_document,
         "military": application.military_obligations_document,
-        "employmentCertificate": application.employment_certificate_document,
+        "employmentCertificate": (
+            application.employment_certificates.first().file
+            if application.employment_certificates.exists()
+            else None
+        ),
         "publicEmployeePermission": application.public_employee_permission_document,
         "notParticipatedDeclaration": application.not_participated_declaration_document,
         "euCitizenGreekLanguageCertificate": application.eu_citizen_greek_language_certificate_document,
