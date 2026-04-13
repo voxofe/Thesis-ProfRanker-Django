@@ -110,6 +110,7 @@ class Application(models.Model):
     phd_is_from_foreign_institute = models.BooleanField(default=False, blank=True, null=True)
     work_experience = models.IntegerField(blank=True, null=True)
     has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)
+    is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)
 
     cv_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     phd_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
@@ -119,6 +120,7 @@ class Application(models.Model):
     employment_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     public_employee_permission_document = models.FileField(upload_to="documents/", blank=True, null=True, max_length=255)
     not_participated_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
+    eu_citizen_greek_language_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     responsible_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)

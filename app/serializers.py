@@ -41,6 +41,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "employment_certificate_document",
             "public_employee_permission_document",
             "not_participated_declaration_document",
+            "eu_citizen_greek_language_certificate_document",
             "responsible_declaration_document"
         ]
 

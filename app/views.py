@@ -159,6 +159,7 @@ def get_user_by_token(request):
             "scientificField": app.position.scientific_field.name if app.position else None,
             "workExperience": app.work_experience,
             "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
+            "isEuCitizenNonGreek": app.is_eu_citizen_non_greek,
             "cvDocument": get_filename(app.cv_document),
             "phdDocument": get_filename(app.phd_document),
             "doatapDocument": get_filename(app.doatap_document),
@@ -167,6 +168,7 @@ def get_user_by_token(request):
             "employmentCertificateDocument": get_filename(app.employment_certificate_document),
             "publicEmployeePermissionDocument": get_filename(app.public_employee_permission_document),
             "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
+            "euCitizenGreekLanguageCertificateDocument": get_filename(app.eu_citizen_greek_language_certificate_document),
             "responsibleDeclarationDocument": get_filename(app.responsible_declaration_document),
 
             "papers": [
@@ -245,8 +247,7 @@ def build_profile_response(user, profile, application=None):
             "phd": file_info(profile.phd_document, "phd"),
             "doatap": file_info(profile.doatap_document, "doatap"),
             "coursePlan": file_info(profile.course_plan_document, "coursePlan"),
-            "military": file_info(profile.military_obligations_document, "military"),
-            "publicEmployeePermission": file_info(profile.public_employee_permission_document, "publicEmployeePermission"),
+            "military": file_info(profile.military_obligations_document, "military"),    
         },
         "applications": applications,
     }
@@ -463,6 +464,7 @@ def handle_form_submission(request):
 
             application.work_experience = int(form_data.get("workExperience", 0))
             application.has_not_participated_in_past_program = form_data.get("hasNotParticipatedInPastProgram") == "true"
+            application.is_eu_citizen_non_greek = form_data.get("isEuCitizenNonGreek") == "true"
 
             # --- Handle file fields (replace if new file uploaded) ---
             def handle_file(field_name, new_file):
@@ -482,6 +484,7 @@ def handle_form_submission(request):
             handle_file("employment_certificate_document", request.FILES.get("employmentCertificateDocument"))
             handle_file("public_employee_permission_document", request.FILES.get("publicEmployeePermissionDocument"))
             handle_file("not_participated_declaration_document", request.FILES.get("notParticipatedDeclarationDocument"))
+            handle_file("eu_citizen_greek_language_certificate_document", request.FILES.get("euCitizenGreekLanguageCertificateDocument"))
             handle_file("responsible_declaration_document", request.FILES.get("responsibleDeclarationDocument"))
 
             application.save()
@@ -677,6 +680,7 @@ def get_applicant_score(request, id):
             "employmentCertificate": file_info(application.employment_certificate_document, "employmentCertificate"),
             "publicEmployeePermission": file_info(application.public_employee_permission_document, "publicEmployeePermission"),
             "notParticipatedDeclaration": file_info(application.not_participated_declaration_document, "notParticipatedDeclaration"),
+            "euCitizenGreekLanguageCertificate": file_info(application.eu_citizen_greek_language_certificate_document, "euCitizenGreekLanguageCertificate"),
             "responsibleDeclaration": file_info(application.responsible_declaration_document, "responsibleDeclaration"),
         },
     }
@@ -711,6 +715,7 @@ def download_applicant_document(request, id, doc_key):
         "employmentCertificate": application.employment_certificate_document,
         "publicEmployeePermission": application.public_employee_permission_document,
         "notParticipatedDeclaration": application.not_participated_declaration_document,
+        "euCitizenGreekLanguageCertificate": application.eu_citizen_greek_language_certificate_document,
         "responsibleDeclaration": application.responsible_declaration_document,
     }
 
