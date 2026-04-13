@@ -117,6 +117,9 @@ class Application(models.Model):
     course_plan_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     military_obligations_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     employment_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
+    public_employee_permission_document = models.FileField(upload_to="documents/", blank=True, null=True, max_length=255)
+    not_participated_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
+    
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)

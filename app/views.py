@@ -165,6 +165,8 @@ def get_user_by_token(request):
             "coursePlanDocument": get_filename(app.course_plan_document),
             "militaryObligationsDocument": get_filename(app.military_obligations_document),
             "employmentCertificateDocument": get_filename(app.employment_certificate_document),
+            "publicEmployeePermissionDocument": get_filename(app.public_employee_permission_document),
+            "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
             "papers": [
                 {
                     "id": paper.id,
@@ -242,6 +244,7 @@ def build_profile_response(user, profile, application=None):
             "doatap": file_info(profile.doatap_document, "doatap"),
             "coursePlan": file_info(profile.course_plan_document, "coursePlan"),
             "military": file_info(profile.military_obligations_document, "military"),
+            "publicEmployeePermission": file_info(profile.public_employee_permission_document, "publicEmployeePermission"),
         },
         "applications": applications,
     }
@@ -475,7 +478,8 @@ def handle_form_submission(request):
             handle_file("course_plan_document", request.FILES.get("coursePlanDocument"))
             handle_file("military_obligations_document", request.FILES.get("militaryObligationsDocument"))
             handle_file("employment_certificate_document", request.FILES.get("employmentCertificateDocument"))
-
+            handle_file("public_employee_permission_document", request.FILES.get("publicEmployeePermissionDocument"))
+            handle_file("not_participated_declaration_document", request.FILES.get("notParticipatedDeclarationDocument"))
             application.save()
 
             # --- Papers resubmission logic ---
@@ -667,6 +671,8 @@ def get_applicant_score(request, id):
             "coursePlan": file_info(application.course_plan_document, "coursePlan"),
             "military": file_info(application.military_obligations_document, "military"),
             "employmentCertificate": file_info(application.employment_certificate_document, "employmentCertificate"),
+            "publicEmployeePermission": file_info(application.public_employee_permission_document, "publicEmployeePermission"),
+            "notParticipatedDeclaration": file_info(application.not_participated_declaration_document, "notParticipatedDeclaration"),
         },
     }
     return JsonResponse(data, safe=False)
@@ -698,6 +704,8 @@ def download_applicant_document(request, id, doc_key):
         "coursePlan": application.course_plan_document,
         "military": application.military_obligations_document,
         "employmentCertificate": application.employment_certificate_document,
+        "publicEmployeePermission": application.public_employee_permission_document,
+        "notParticipatedDeclaration": application.not_participated_declaration_document,
     }
 
     file_field = document_map.get(doc_key)
