@@ -5,7 +5,19 @@ from .models import User, Application, Paper
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'first_name', 'last_name', 'email', 'phone_number', 'role', 'gender']
+        fields = [
+            'id',
+            'first_name',
+            'last_name',
+            'email',
+            'mobile_number',
+            'landline_number',
+            'street_address',
+            'city',
+            'postal_code',
+            'role',
+            'gender',
+        ]
 
 # Serializer for Application
 class ApplicationSerializer(serializers.ModelSerializer):

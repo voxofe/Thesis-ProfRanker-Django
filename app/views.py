@@ -28,7 +28,6 @@ def user_register(request):
     first_name = data.get("firstName")
     last_name = data.get("lastName")
     email = data.get("email")
-    phone_number = data.get("phoneNumber")
     password = data.get("password")
     gender = data.get("gender")
 
@@ -42,7 +41,6 @@ def user_register(request):
         first_name=first_name,
         last_name=last_name,
         email=email,
-        phone_number=phone_number,
         role="guest",
         gender=gender,
     )
@@ -75,7 +73,6 @@ def user_register_admin(request):
     first_name = data.get("firstName")
     last_name = data.get("lastName")
     email = data.get("email")
-    phone_number = data.get("phoneNumber")
     password = data.get("password")
 
     if User.objects.filter(email=email).exists():
@@ -85,7 +82,6 @@ def user_register_admin(request):
         first_name=first_name,
         last_name=last_name,
         email=email,
-        phone_number=phone_number,
         role="admin"
     )
     new_admin.set_password(password)
@@ -132,7 +128,11 @@ def get_user_by_token(request):
         "firstName": user.first_name,
         "lastName": user.last_name,
         "email": user.email,
-        "phoneNumber": user.phone_number,
+        "mobileNumber": user.mobile_number,
+        "landlineNumber": user.landline_number,
+        "streetAddress": user.street_address,
+        "city": user.city,
+        "postalCode": user.postal_code,
         "role": user.role,
         "gender": user.gender,
     }
@@ -219,7 +219,11 @@ def build_profile_response(user, profile, application=None):
             "firstName": user.first_name,
             "lastName": user.last_name,
             "email": user.email,
-            "phoneNumber": user.phone_number,
+            "mobileNumber": user.mobile_number,
+            "landlineNumber": user.landline_number,
+            "streetAddress": user.street_address,
+            "city": user.city,
+            "postalCode": user.postal_code,
             "role": user.role,
             "gender": user.gender,
         },
@@ -259,7 +263,11 @@ def profile_detail(request):
         first_name = data.get("firstName")
         last_name = data.get("lastName")
         email = data.get("email")
-        phone_number = data.get("phoneNumber")
+        mobile_number = data.get("mobileNumber")
+        landline_number = data.get("landlineNumber")
+        street_address = data.get("streetAddress")
+        city = data.get("city")
+        postal_code = data.get("postalCode")
         gender = data.get("gender")
         preferred_sf_id = data.get("preferredScientificFieldId")
 
@@ -272,8 +280,16 @@ def profile_detail(request):
             user.last_name = last_name
         if email is not None:
             user.email = email
-        if phone_number is not None:
-            user.phone_number = phone_number
+        if mobile_number is not None:
+            user.mobile_number = mobile_number
+        if landline_number is not None:
+            user.landline_number = landline_number
+        if street_address is not None:
+            user.street_address = street_address
+        if city is not None:
+            user.city = city
+        if postal_code is not None:
+            user.postal_code = postal_code
         if gender in {"male", "female", None, ""}:
             user.gender = gender or None
         user.save()

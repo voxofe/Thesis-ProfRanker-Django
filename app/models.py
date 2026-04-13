@@ -15,7 +15,11 @@ class User(models.Model):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
-    phone_number = models.CharField(max_length=30, blank=True, null=True)
+    mobile_number = models.CharField(max_length=30, blank=True, null=True)
+    landline_number = models.CharField(max_length=30, blank=True, null=True)
+    street_address = models.CharField(max_length=255, blank=True, null=True)
+    city = models.CharField(max_length=120, blank=True, null=True)
+    postal_code = models.CharField(max_length=20, blank=True, null=True)
     role = models.CharField(max_length=10, choices=ROLES)
     gender = models.CharField(max_length=6, choices=GENDERS, blank=True, null=True)
     password = models.CharField(max_length=128)  # Store hashed password
