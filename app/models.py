@@ -15,6 +15,7 @@ class User(models.Model):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
+    phone_number = models.CharField(max_length=30, blank=True, null=True)
     role = models.CharField(max_length=10, choices=ROLES)
     gender = models.CharField(max_length=6, choices=GENDERS, blank=True, null=True)
     password = models.CharField(max_length=128)  # Store hashed password
@@ -28,6 +29,28 @@ class User(models.Model):
 
     def __str__(self):
         return f"{self.first_name} {self.last_name} - {self.email} ({self.role})"
+
+
+class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
+    preferred_scientific_field = models.ForeignKey(
+        "ScientificField",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="preferred_by_users",
+    )
+
+    cv_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+    phd_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+    doatap_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+    course_plan_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+    military_obligations_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Profile: {self.user.first_name} {self.user.last_name}"
 
 class ScientificField(models.Model):
     name = models.CharField(max_length=255)

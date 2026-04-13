@@ -6,7 +6,7 @@ from .serializers import ApplicationSerializer, PaperSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .models import Application, Paper, User, ScientificField, Course
+from .models import Application, Paper, User, ScientificField, Course, UserProfile
 from .serializers import ApplicationSerializer, UserSerializer
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
@@ -28,6 +28,7 @@ def user_register(request):
     first_name = data.get("firstName")
     last_name = data.get("lastName")
     email = data.get("email")
+    phone_number = data.get("phoneNumber")
     password = data.get("password")
     gender = data.get("gender")
 
@@ -41,6 +42,7 @@ def user_register(request):
         first_name=first_name,
         last_name=last_name,
         email=email,
+        phone_number=phone_number,
         role="guest",
         gender=gender,
     )
@@ -73,6 +75,7 @@ def user_register_admin(request):
     first_name = data.get("firstName")
     last_name = data.get("lastName")
     email = data.get("email")
+    phone_number = data.get("phoneNumber")
     password = data.get("password")
 
     if User.objects.filter(email=email).exists():
@@ -82,6 +85,7 @@ def user_register_admin(request):
         first_name=first_name,
         last_name=last_name,
         email=email,
+        phone_number=phone_number,
         role="admin"
     )
     new_admin.set_password(password)
@@ -128,6 +132,7 @@ def get_user_by_token(request):
         "firstName": user.first_name,
         "lastName": user.last_name,
         "email": user.email,
+        "phoneNumber": user.phone_number,
         "role": user.role,
         "gender": user.gender,
     }
@@ -171,6 +176,196 @@ def get_user_by_token(request):
         }
 
     return JsonResponse(user_data, safe=False)
+
+
+def build_profile_response(user, profile, application=None):
+    tz = ZoneInfo("Europe/Athens")
+
+    def file_info(file_field, key):
+        if not file_field:
+            return {"name": None, "downloadPath": None}
+        return {
+            "name": file_field.name.split("/")[-1],
+            "downloadPath": f"/api/profile/documents/{key}",
+        }
+
+    preferred_sf = profile.preferred_scientific_field
+    if not preferred_sf and application and application.position:
+        preferred_sf = application.position.scientific_field
+
+    applications = []
+    if application:
+        sf = application.position.scientific_field if application.position else None
+        submit_date = (
+            timezone.localtime(application.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
+            if application.submitted_at
+            else ""
+        )
+        applications.append(
+            {
+                "id": application.id,
+                "positionId": application.position.id if application.position else None,
+                "scientificField": sf.name if sf else "",
+                "department": sf.department if sf else "",
+                "school": get_school_of_department(sf.department) if sf else "",
+                "submitDate": submit_date,
+                "totalPoints": application.total_points,
+            }
+        )
+
+    return {
+        "user": {
+            "id": user.id,
+            "firstName": user.first_name,
+            "lastName": user.last_name,
+            "email": user.email,
+            "phoneNumber": user.phone_number,
+            "role": user.role,
+            "gender": user.gender,
+        },
+        "preferredScientificFieldId": preferred_sf.id if preferred_sf else None,
+        "preferredScientificFieldLabel": preferred_sf.name if preferred_sf else "",
+        "documents": {
+            "cv": file_info(profile.cv_document, "cv"),
+            "phd": file_info(profile.phd_document, "phd"),
+            "doatap": file_info(profile.doatap_document, "doatap"),
+            "coursePlan": file_info(profile.course_plan_document, "coursePlan"),
+            "military": file_info(profile.military_obligations_document, "military"),
+        },
+        "applications": applications,
+    }
+
+
+@api_view(["GET", "PUT"])
+def profile_detail(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    application = getattr(user, "application", None)
+
+    if request.method == "PUT":
+        data = request.data
+        first_name = data.get("firstName")
+        last_name = data.get("lastName")
+        email = data.get("email")
+        phone_number = data.get("phoneNumber")
+        gender = data.get("gender")
+        preferred_sf_id = data.get("preferredScientificFieldId")
+
+        if email and email != user.email and User.objects.filter(email=email).exists():
+            return JsonResponse({"error": "Email already registered."}, status=400)
+
+        if first_name is not None:
+            user.first_name = first_name
+        if last_name is not None:
+            user.last_name = last_name
+        if email is not None:
+            user.email = email
+        if phone_number is not None:
+            user.phone_number = phone_number
+        if gender in {"male", "female", None, ""}:
+            user.gender = gender or None
+        user.save()
+
+        if preferred_sf_id in [None, "", "null"]:
+            profile.preferred_scientific_field = None
+        else:
+            sf = ScientificField.objects.filter(id=preferred_sf_id).first()
+            if not sf:
+                return JsonResponse({"error": "Scientific field not found."}, status=404)
+            profile.preferred_scientific_field = sf
+        profile.save()
+
+    response = build_profile_response(user, profile, application)
+    return JsonResponse(response, safe=False)
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+def profile_documents_upload(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+
+    field_map = {
+        "cvDocument": "cv_document",
+        "phdDocument": "phd_document",
+        "doatapDocument": "doatap_document",
+        "coursePlanDocument": "course_plan_document",
+        "militaryObligationsDocument": "military_obligations_document",
+    }
+
+    for incoming, model_field in field_map.items():
+        new_file = request.FILES.get(incoming)
+        if new_file:
+            old_file = getattr(profile, model_field)
+            if old_file:
+                old_file.delete(save=False)
+            setattr(profile, model_field, new_file)
+
+    profile.save()
+    application = getattr(user, "application", None)
+    response = build_profile_response(user, profile, application)
+    return JsonResponse(response, safe=False)
+
+
+@api_view(["GET"])
+def profile_document_download(request, doc_key):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    profile = UserProfile.objects.filter(user=user).first()
+    if not profile:
+        return JsonResponse({"error": "Profile not found."}, status=404)
+
+    document_map = {
+        "cv": profile.cv_document,
+        "phd": profile.phd_document,
+        "doatap": profile.doatap_document,
+        "coursePlan": profile.course_plan_document,
+        "military": profile.military_obligations_document,
+    }
+
+    file_field = document_map.get(doc_key)
+    if not file_field or not file_field.name:
+        return JsonResponse({"error": "Document not found."}, status=404)
+
+    filename = os.path.basename(file_field.name)
+    response = FileResponse(file_field.open("rb"), as_attachment=True, filename=filename)
+    response["Content-Type"] = "application/octet-stream"
+    return response
 
 # Handle Form Submission
 def process_paper(paper):
