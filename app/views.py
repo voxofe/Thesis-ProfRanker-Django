@@ -146,7 +146,13 @@ def get_user_by_token(request):
         app = user.application
         user_data["form"] = {
             "id": app.id,
-            "positionId": app.position.id if app.position else None, 
+            "positionId": app.position.id if app.position else None,
+            "phoneNumber": app.phone_number,
+            "landlineNumber": app.landline_number,
+            "streetAddress": app.street_address,
+            "city": app.city,
+            "postalCode": app.postal_code,
+            "isPublicEmployee": app.is_public_employee,
             "phdTitle": app.phd_title,
             "phdAcquisitionDate": app.phd_acquisition_date,
             "phdIsFromForeignInstitute": app.phd_is_from_foreign_institute,
@@ -158,6 +164,7 @@ def get_user_by_token(request):
             "doatapDocument": get_filename(app.doatap_document),
             "coursePlanDocument": get_filename(app.course_plan_document),
             "militaryObligationsDocument": get_filename(app.military_obligations_document),
+            "employmentCertificateDocument": get_filename(app.employment_certificate_document),
             "papers": [
                 {
                     "id": paper.id,
@@ -429,7 +436,12 @@ def handle_form_submission(request):
             application, created = Application.objects.get_or_create(user=user)
 
             # --- Update simple fields ---
-
+            application.phone_number = form_data.get("phoneNumber")
+            application.landline_number = form_data.get("landlineNumber")
+            application.street_address = form_data.get("streetAddress")
+            application.city = form_data.get("city")
+            application.postal_code = form_data.get("postalCode")
+            application.is_public_employee = form_data.get("isPublicEmployee") == "true"
             application.phd_title = form_data.get("phdTitle")
             application.phd_acquisition_date = form_data.get("phdAcquisitionDate")
             application.phd_is_from_foreign_institute = form_data.get("phdIsFromForeignInstitute") == "true"
@@ -462,7 +474,7 @@ def handle_form_submission(request):
             handle_file("doatap_document", request.FILES.get("doatapDocument"))
             handle_file("course_plan_document", request.FILES.get("coursePlanDocument"))
             handle_file("military_obligations_document", request.FILES.get("militaryObligationsDocument"))
-            
+            handle_file("employment_certificate_document", request.FILES.get("employmentCertificateDocument"))
 
             application.save()
 
@@ -654,6 +666,7 @@ def get_applicant_score(request, id):
             "doatap": file_info(application.doatap_document, "doatap"),
             "coursePlan": file_info(application.course_plan_document, "coursePlan"),
             "military": file_info(application.military_obligations_document, "military"),
+            "employmentCertificate": file_info(application.employment_certificate_document, "employmentCertificate"),
         },
     }
     return JsonResponse(data, safe=False)
@@ -684,6 +697,7 @@ def download_applicant_document(request, id, doc_key):
         "doatap": application.doatap_document,
         "coursePlan": application.course_plan_document,
         "military": application.military_obligations_document,
+        "employmentCertificate": application.employment_certificate_document,
     }
 
     file_field = document_map.get(doc_key)

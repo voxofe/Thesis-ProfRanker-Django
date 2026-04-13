@@ -99,6 +99,12 @@ class Position(models.Model):
 
 class Application(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="application", null=True, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    landline_number = models.CharField(max_length=20, blank=True, null=True)
+    street_address = models.CharField(max_length=255, blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True)
+    postal_code = models.CharField(max_length=20, blank=True, null=True)
+    is_public_employee = models.BooleanField(default=False, blank=True, null=True)
     phd_title = models.CharField(max_length=255, blank=True, null=True)
     phd_acquisition_date = models.DateField(blank=True, null=True)
     phd_is_from_foreign_institute = models.BooleanField(default=False, blank=True, null=True)
@@ -110,7 +116,7 @@ class Application(models.Model):
     doatap_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     course_plan_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     military_obligations_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-
+    employment_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)
