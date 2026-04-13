@@ -38,7 +38,10 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "doatap_document",
             "military_obligations_document",
             "cv_document",
-            "employment_certificate_document"
+            "employment_certificate_document",
+            "public_employee_permission_document",
+            "not_participated_declaration_document",
+            "responsible_declaration_document"
         ]
 
         for field in file_fields:

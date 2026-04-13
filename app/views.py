@@ -167,6 +167,8 @@ def get_user_by_token(request):
             "employmentCertificateDocument": get_filename(app.employment_certificate_document),
             "publicEmployeePermissionDocument": get_filename(app.public_employee_permission_document),
             "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
+            "responsibleDeclarationDocument": get_filename(app.responsible_declaration_document),
+
             "papers": [
                 {
                     "id": paper.id,
@@ -480,6 +482,8 @@ def handle_form_submission(request):
             handle_file("employment_certificate_document", request.FILES.get("employmentCertificateDocument"))
             handle_file("public_employee_permission_document", request.FILES.get("publicEmployeePermissionDocument"))
             handle_file("not_participated_declaration_document", request.FILES.get("notParticipatedDeclarationDocument"))
+            handle_file("responsible_declaration_document", request.FILES.get("responsibleDeclarationDocument"))
+
             application.save()
 
             # --- Papers resubmission logic ---
@@ -673,6 +677,7 @@ def get_applicant_score(request, id):
             "employmentCertificate": file_info(application.employment_certificate_document, "employmentCertificate"),
             "publicEmployeePermission": file_info(application.public_employee_permission_document, "publicEmployeePermission"),
             "notParticipatedDeclaration": file_info(application.not_participated_declaration_document, "notParticipatedDeclaration"),
+            "responsibleDeclaration": file_info(application.responsible_declaration_document, "responsibleDeclaration"),
         },
     }
     return JsonResponse(data, safe=False)
@@ -706,6 +711,7 @@ def download_applicant_document(request, id, doc_key):
         "employmentCertificate": application.employment_certificate_document,
         "publicEmployeePermission": application.public_employee_permission_document,
         "notParticipatedDeclaration": application.not_participated_declaration_document,
+        "responsibleDeclaration": application.responsible_declaration_document,
     }
 
     file_field = document_map.get(doc_key)
