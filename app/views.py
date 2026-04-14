@@ -133,15 +133,15 @@ def get_user_by_token(request):
         "role": user.role,
         "gender": user.gender,
     }
+    user_data["applications"] = []
 
     def get_filename(filefield):
         if filefield and filefield.name:
             return filefield.name.split('/')[-1]
         return None
 
-    if hasattr(user, "application") and user.application:
-        app = user.application
-        user_data["form"] = {
+    def build_application_form(app):
+        return {
             "id": app.id,
             "positionId": app.position.id if app.position else None,
             "phoneNumber": app.phone_number,
@@ -180,7 +180,6 @@ def get_user_by_token(request):
             "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
             "euCitizenGreekLanguageCertificateDocument": get_filename(app.eu_citizen_greek_language_certificate_document),
             "responsibleDeclarationDocument": get_filename(app.responsible_declaration_document),
-
             "papers": [
                 {
                     "id": paper.id,
@@ -198,10 +197,20 @@ def get_user_by_token(request):
             "positionStartDate": app.position.start_date if app.position else None,
         }
 
+    applications = list(
+        user.applications.select_related("position", "position__scientific_field")
+        .prefetch_related("bio_supporting_documents", "employment_certificates", "papers")
+        .order_by("-submitted_at", "-id")
+    )
+    if applications:
+        forms = [build_application_form(app) for app in applications]
+        user_data["applications"] = forms
+        user_data["form"] = forms[0]
+
     return JsonResponse(user_data, safe=False)
 
 
-def build_profile_response(user, profile, application=None):
+def build_profile_response(user, profile, applications=None):
     tz = ZoneInfo("Europe/Athens")
 
     def file_info(file_field, key):
@@ -213,18 +222,20 @@ def build_profile_response(user, profile, application=None):
         }
 
     preferred_sf = profile.preferred_scientific_field
-    if not preferred_sf and application and application.position:
-        preferred_sf = application.position.scientific_field
+    if not preferred_sf and applications:
+        first_app = applications[0]
+        if first_app.position:
+            preferred_sf = first_app.position.scientific_field
 
-    applications = []
-    if application:
+    applications_data = []
+    for application in applications or []:
         sf = application.position.scientific_field if application.position else None
         submit_date = (
             timezone.localtime(application.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
             if application.submitted_at
             else ""
         )
-        applications.append(
+        applications_data.append(
             {
                 "id": application.id,
                 "positionId": application.position.id if application.position else None,
@@ -259,7 +270,7 @@ def build_profile_response(user, profile, application=None):
             "coursePlan": file_info(profile.course_plan_document, "coursePlan"),
             "military": file_info(profile.military_obligations_document, "military"),    
         },
-        "applications": applications,
+        "applications": applications_data,
     }
 
 
@@ -279,7 +290,11 @@ def profile_detail(request):
         return JsonResponse({"error": "User not found"}, status=404)
 
     profile, _ = UserProfile.objects.get_or_create(user=user)
-    application = getattr(user, "application", None)
+    applications = list(
+        Application.objects.filter(user=user)
+        .select_related("position", "position__scientific_field")
+        .order_by("-submitted_at", "-id")
+    )
 
     if request.method == "PUT":
         data = request.data
@@ -326,7 +341,7 @@ def profile_detail(request):
             profile.preferred_scientific_field = sf
         profile.save()
 
-    response = build_profile_response(user, profile, application)
+    response = build_profile_response(user, profile, applications)
     return JsonResponse(response, safe=False)
 
 
@@ -365,8 +380,12 @@ def profile_documents_upload(request):
             setattr(profile, model_field, new_file)
 
     profile.save()
-    application = getattr(user, "application", None)
-    response = build_profile_response(user, profile, application)
+    applications = list(
+        Application.objects.filter(user=user)
+        .select_related("position", "position__scientific_field")
+        .order_by("-submitted_at", "-id")
+    )
+    response = build_profile_response(user, profile, applications)
     return JsonResponse(response, safe=False)
 
 
@@ -448,8 +467,21 @@ def handle_form_submission(request):
             papers_json = form_data.get("papers", "[]")
             papers = json.loads(papers_json)
 
+            # --- Require position for unique application ---
+            position_id = form_data.get("positionId")
+            if not position_id or str(position_id).lower() in {"", "null", "none"}:
+                return JsonResponse({"error": "Position is required."}, status=400)
+
+            try:
+                position = Position.objects.get(id=position_id)
+            except Position.DoesNotExist:
+                return JsonResponse({"error": "Position not found."}, status=404)
+
             # --- Get or create Application ---
-            application, created = Application.objects.get_or_create(user=user)
+            application, created = Application.objects.get_or_create(
+                user=user,
+                position=position,
+            )
 
             # --- Update simple fields ---
             application.phone_number = form_data.get("phoneNumber")
@@ -462,15 +494,7 @@ def handle_form_submission(request):
             application.phd_acquisition_date = form_data.get("phdAcquisitionDate")
             application.phd_is_from_foreign_institute = form_data.get("phdIsFromForeignInstitute") == "true"
 
-            # Set position (assumes you send positionId from frontend)
-            position_id = form_data.get("positionId")
-            if position_id:
-                from .models import Position
-                try:
-                    position = Position.objects.get(id=position_id)
-                    application.position = position
-                except Position.DoesNotExist:
-                    application.position = None
+            application.position = position
 
             application.work_experience = int(form_data.get("workExperience", 0))
             application.has_not_participated_in_past_program = form_data.get("hasNotParticipatedInPastProgram") == "true"
@@ -645,7 +669,18 @@ def get_applicant_score(request, id):
     if requesting_user.role != "admin" and requesting_user.id != id:
         return JsonResponse({"error": "Forbidden."}, status=403)
 
-    application = get_object_or_404(Application, user__id=id)
+    application_id = request.query_params.get("applicationId") or request.query_params.get("application_id")
+    if application_id:
+        application = get_object_or_404(Application, id=application_id, user__id=id)
+    else:
+        application = (
+            Application.objects.filter(user__id=id)
+            .select_related("position", "position__scientific_field")
+            .order_by("-submitted_at", "-id")
+            .first()
+        )
+        if not application:
+            return JsonResponse({"error": "Application not found."}, status=404)
     user = application.user
     sf = application.position.scientific_field if application.position else None
 
@@ -763,7 +798,18 @@ def download_applicant_document(request, id, doc_key):
     if requesting_user.role != "admin" and requesting_user.id != id:
         return JsonResponse({"error": "Forbidden."}, status=403)
 
-    application = get_object_or_404(Application, user__id=id)
+    application_id = request.query_params.get("applicationId") or request.query_params.get("application_id")
+    if application_id:
+        application = get_object_or_404(Application, id=application_id, user__id=id)
+    else:
+        application = (
+            Application.objects.filter(user__id=id)
+            .select_related("position", "position__scientific_field")
+            .order_by("-submitted_at", "-id")
+            .first()
+        )
+        if not application:
+            return JsonResponse({"error": "Application not found."}, status=404)
     document_map = {
         "cv": application.cv_document,
         "phd": application.phd_document,
@@ -812,9 +858,10 @@ def get_all_scores(request):
     tz = ZoneInfo("Europe/Athens")
     now = timezone.now().astimezone(tz)
     for user in applicants:
-        app = getattr(user, "application", None)
-        if app:
-            # Only include if admin, or if position end_date has passed
+        applications = user.applications.select_related("position", "position__scientific_field").all()
+        for app in applications:
+            if not app.position or not app.position.scientific_field:
+                continue
             include = True
             if user_role in ["applicant", "guest"]:
                 if not app.position or not app.position.end_date:
@@ -824,27 +871,28 @@ def get_all_scores(request):
                     end_dt = datetime.combine(app.position.end_date, end_t, tzinfo=tz)
                     if end_dt >= now:
                         include = False
-            if include:
-                # Format submitDate as "day-month-year hh:mm"
-                if hasattr(app, "submitted_at") and app.submitted_at:
-                    submit_date = timezone.localtime(app.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
-                else:
-                    submit_date = ""
-                result.append({
-                    "id": user.id,
-                    "applicationId": app.id,
-                    "firstName": user.first_name,
-                    "lastName": user.last_name,
-                    "school": get_school_of_department(app.position.scientific_field.department),
-                    "department": app.position.scientific_field.department,
-                    "scientificField": app.position.scientific_field.name,
-                    "submitDate": submit_date,
-                    "positionStartDate": app.position.start_date.strftime("%d-%m-%Y") if app.position and app.position.start_date else "",
-                    "positionEndDate": app.position.end_date.strftime("%d-%m-%Y") if app.position and app.position.end_date else "",
-                    "positionStartTime": app.position.start_time.strftime("%H:%M") if app.position and app.position.start_time else "",
-                    "positionEndTime": app.position.end_time.strftime("%H:%M") if app.position and app.position.end_time else "",
-                    "totalPoints": app.total_points,
-                })
+            if not include:
+                continue
+
+            if hasattr(app, "submitted_at") and app.submitted_at:
+                submit_date = timezone.localtime(app.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
+            else:
+                submit_date = ""
+            result.append({
+                "id": user.id,
+                "applicationId": app.id,
+                "firstName": user.first_name,
+                "lastName": user.last_name,
+                "school": get_school_of_department(app.position.scientific_field.department),
+                "department": app.position.scientific_field.department,
+                "scientificField": app.position.scientific_field.name,
+                "submitDate": submit_date,
+                "positionStartDate": app.position.start_date.strftime("%d-%m-%Y") if app.position and app.position.start_date else "",
+                "positionEndDate": app.position.end_date.strftime("%d-%m-%Y") if app.position and app.position.end_date else "",
+                "positionStartTime": app.position.start_time.strftime("%H:%M") if app.position and app.position.start_time else "",
+                "positionEndTime": app.position.end_time.strftime("%H:%M") if app.position and app.position.end_time else "",
+                "totalPoints": app.total_points,
+            })
     return JsonResponse(result, safe=False)
 
 # Scientific Fields collection (list + create)

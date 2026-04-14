@@ -98,7 +98,7 @@ class Position(models.Model):
         return f"{self.scientific_field.name} ({self.start_date} - {self.end_date})"
 
 class Application(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="application", null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="applications", null=True, blank=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     landline_number = models.CharField(max_length=20, blank=True, null=True)
     street_address = models.CharField(max_length=255, blank=True, null=True)
@@ -133,7 +133,17 @@ class Application(models.Model):
     submitted_at = models.DateTimeField(auto_now_add=True)
     position = models.ForeignKey(Position, on_delete=models.CASCADE, related_name="applications", null=True, blank=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "position"],
+                name="unique_application_per_user_position",
+            )
+        ]
+
     def __str__(self):
+        if not self.user:
+            return f"Application #{self.id}"
         return f"{self.user.first_name} {self.user.last_name} - {self.user.email}"
 
 class BioSupportingDocument(models.Model):
