@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Application, Paper, EmploymentCertificate
+from .models import User, Application, Paper,  EmploymentCertificate, BioSupportingDocument
 
 # Serializer for User
 class UserSerializer(serializers.ModelSerializer):
@@ -19,6 +19,11 @@ class UserSerializer(serializers.ModelSerializer):
             'gender',
         ]
 
+class BioSupportingDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BioSupportingDocument
+        fields = ["id", "file"]
+
 class EmploymentCertificateSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmploymentCertificate
@@ -27,6 +32,7 @@ class EmploymentCertificateSerializer(serializers.ModelSerializer):
 # Serializer for Application
 class ApplicationSerializer(serializers.ModelSerializer):
     user = UserSerializer()
+    bio_supporting_documents = BioSupportingDocumentSerializer(many=True, read_only=True)
     employment_certificates = EmploymentCertificateSerializer(many=True, read_only=True)
     
     class Meta:
@@ -52,6 +58,14 @@ class ApplicationSerializer(serializers.ModelSerializer):
             file_obj = getattr(instance, field)
             data[field] = file_obj.url if file_obj else None
 
+        data["bio_supporting_documents"] = [
+            {
+                "id": doc.id,
+                "file": doc.file.url if doc.file else None,
+            }
+            for doc in instance.bio_supporting_documents.all()
+        ]
+        
         data["employment_certificates"] = [
             {
                 "id": cert.id,

@@ -6,7 +6,7 @@ from .serializers import ApplicationSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .models import Application, Paper, User, Position, ScientificField, Course, UserProfile, EmploymentCertificate
+from .models import Application, Paper, User, Position, ScientificField, Course, UserProfile, EmploymentCertificate, BioSupportingDocument
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 import time
@@ -158,6 +158,13 @@ def get_user_by_token(request):
             "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
             "isEuCitizenNonGreek": app.is_eu_citizen_non_greek,
             "cvDocument": get_filename(app.cv_document),
+            "bioSupportingDocuments": [
+                {
+                    "id": doc.id,
+                    "name": get_filename(doc.file),
+                }
+                for doc in app.bio_supporting_documents.all()
+            ],
             "phdDocument": get_filename(app.phd_document),
             "doatapDocument": get_filename(app.doatap_document),
             "coursePlanDocument": get_filename(app.course_plan_document),
@@ -491,6 +498,20 @@ def handle_form_submission(request):
 
             application.save()
 
+            bio_supporting_document_files = request.FILES.getlist("bioSupportingDocuments")
+            if bio_supporting_document_files:
+                for doc in application.bio_supporting_documents.all():
+                    if doc.file:
+                        doc.file.delete(save=False)
+                    doc.delete()
+
+                for doc_file in bio_supporting_document_files:
+                    if doc_file:
+                        BioSupportingDocument.objects.create(
+                            application=application,
+                            file=doc_file,
+                        )
+
             employment_certificate_files = request.FILES.getlist("employmentCertificateDocuments")
             should_replace_employment_certificates = bool(employment_certificate_files)
 
@@ -691,6 +712,16 @@ def get_applicant_score(request, id):
         "positionEndTime": application.position.end_time.strftime("%H:%M") if application.position and application.position.end_time else "",
         "documents": {
             "cv": file_info(application.cv_document, "cv"),
+            "bioSupportingDocuments": [
+                {
+                    "id": doc.id,
+                    "url": request.build_absolute_uri(doc.file.url),
+                    "name": doc.file.name.split("/")[-1] if doc.file else None,
+                    "downloadPath": None,
+                }
+                for doc in application.bio_supporting_documents.all()
+                if doc.file
+            ],
             "phd": file_info(application.phd_document, "phd"),
             "doatap": file_info(application.doatap_document, "doatap"),
             "coursePlan": file_info(application.course_plan_document, "coursePlan"),

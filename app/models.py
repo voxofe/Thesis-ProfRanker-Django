@@ -136,6 +136,17 @@ class Application(models.Model):
     def __str__(self):
         return f"{self.user.first_name} {self.user.last_name} - {self.user.email}"
 
+class BioSupportingDocument(models.Model):
+    application = models.ForeignKey(
+        Application,
+        on_delete=models.CASCADE,
+        related_name="bio_supporting_documents",
+    )
+    file = models.FileField(upload_to="documents/", max_length=255)
+    
+    def __str__(self):
+        return f"Bio supporting document #{self.id} for application {self.application_id}"
+    
 class EmploymentCertificate(models.Model):
     application = models.ForeignKey(
         Application,
