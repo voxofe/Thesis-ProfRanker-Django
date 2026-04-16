@@ -649,7 +649,7 @@ def handle_form_submission(request):
 
 # Get Applicant Score
 @api_view(["GET"])
-def get_applicant_score(request, id):
+def get_applicant_score(request, application_id):
     # Check for Bearer token
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -665,29 +665,20 @@ def get_applicant_score(request, id):
     if not requesting_user:
         return JsonResponse({"error": "User not found"}, status=404)
 
-    # Only allow if admin or requesting their own data
-    if requesting_user.role != "admin" and requesting_user.id != id:
-        return JsonResponse({"error": "Forbidden."}, status=403)
+    application = get_object_or_404(
+        Application.objects.select_related("position", "position__scientific_field"),
+        id=application_id,
+    )
 
-    application_id = request.query_params.get("applicationId") or request.query_params.get("application_id")
-    if application_id:
-        application = get_object_or_404(Application, id=application_id, user__id=id)
-    else:
-        application = (
-            Application.objects.filter(user__id=id)
-            .select_related("position", "position__scientific_field")
-            .order_by("-submitted_at", "-id")
-            .first()
-        )
-        if not application:
-            return JsonResponse({"error": "Application not found."}, status=404)
+    if requesting_user.role != "admin" and requesting_user.id != application.user_id:
+        return JsonResponse({"error": "Forbidden."}, status=403)
     user = application.user
     sf = application.position.scientific_field if application.position else None
 
     def file_info(file_field, key):
         if not file_field:
             return {"url": None, "name": None, "downloadPath": None}
-        download_path = f"/api/applicant/{id}/documents/{key}"
+        download_path = f"/api/applicant/{application.id}/documents/{key}"
         return {
             "url": request.build_absolute_uri(file_field.url),
             "name": file_field.name.split("/")[-1],
@@ -766,7 +757,7 @@ def get_applicant_score(request, id):
                     "id": cert.id,
                     "url": request.build_absolute_uri(cert.file.url),
                     "name": cert.file.name.split("/")[-1] if cert.file else None,
-                    "downloadPath": f"/api/applicant/{id}/employment-certificates/{cert.id}",
+                    "downloadPath": f"/api/applicant/{application.id}/employment-certificates/{cert.id}",
                 }
                 for cert in application.employment_certificates.all()
                 if cert.file
@@ -781,7 +772,7 @@ def get_applicant_score(request, id):
 
 
 @api_view(["GET"])
-def download_applicant_document(request, id, doc_key):
+def download_applicant_document(request, application_id, doc_key):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return JsonResponse({"error": "Authorization token missing."}, status=401)
@@ -795,21 +786,10 @@ def download_applicant_document(request, id, doc_key):
     if not requesting_user:
         return JsonResponse({"error": "User not found"}, status=404)
 
-    if requesting_user.role != "admin" and requesting_user.id != id:
-        return JsonResponse({"error": "Forbidden."}, status=403)
+    application = get_object_or_404(Application, id=application_id)
 
-    application_id = request.query_params.get("applicationId") or request.query_params.get("application_id")
-    if application_id:
-        application = get_object_or_404(Application, id=application_id, user__id=id)
-    else:
-        application = (
-            Application.objects.filter(user__id=id)
-            .select_related("position", "position__scientific_field")
-            .order_by("-submitted_at", "-id")
-            .first()
-        )
-        if not application:
-            return JsonResponse({"error": "Application not found."}, status=404)
+    if requesting_user.role != "admin" and requesting_user.id != application.user_id:
+        return JsonResponse({"error": "Forbidden."}, status=403)
     document_map = {
         "cv": application.cv_document,
         "phd": application.phd_document,
