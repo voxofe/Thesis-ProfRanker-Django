@@ -366,7 +366,9 @@ def build_profile_response(user, profile, applications=None):
     tz = ZoneInfo("Europe/Athens")
 
     applications_data = []
+    has_submitted_applications = False
     for application in applications or []:
+        has_submitted_applications = True
         sf = application.position.scientific_field if application.position else None
         submit_date = (
             timezone.localtime(application.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
@@ -403,6 +405,7 @@ def build_profile_response(user, profile, applications=None):
             "role": user.role,
             "gender": user.gender,
         },
+        "canEditIdentity": not has_submitted_applications,
         "applicationDefaults": {
             "isPublicEmployee": bool(profile.is_public_employee),
             "isEuCitizenNonGreek": bool(profile.is_eu_citizen_non_greek),
@@ -511,8 +514,29 @@ def profile_detail(request):
                     return False
             return bool(value) if value is not None else None
 
-        if email and email != user.email and User.objects.filter(email=email).exists():
-            return JsonResponse({"error": "Email already registered."}, status=400)
+        if email is not None and email != user.email:
+            return JsonResponse(
+                {
+                    "error": "Δεν επιτρέπεται αλλαγή του email.",
+                },
+                status=400,
+            )
+
+        has_submitted_applications = Application.objects.filter(user=user).exists()
+
+        if has_submitted_applications:
+            attempted_identity_change = False
+            if first_name is not None and first_name != user.first_name:
+                attempted_identity_change = True
+            if last_name is not None and last_name != user.last_name:
+                attempted_identity_change = True
+            if attempted_identity_change:
+                return JsonResponse(
+                    {
+                        "error": "Δεν επιτρέπεται αλλαγή ονόματος μετά την πρώτη υποβολή αίτησης.",
+                    },
+                    status=400,
+                )
 
         if first_name is not None:
             user.first_name = first_name
