@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/profile/documents', views.profile_documents_upload, name='profile_documents_upload'),
     path('api/profile/documents/<str:doc_key>', views.profile_document_download, name='profile_document_download'),
     path('api/submit', views.handle_form_submission, name='handle_form_submission'),
+    path('api/applications/<int:application_id>', views.get_application_detail, name='get_application_detail'),
     path('api/applicant/<int:application_id>', views.get_applicant_score, name='get_applicant_score'),
     path('api/applicant/<int:application_id>/documents/<str:doc_key>', views.download_applicant_document, name='download_applicant_document'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),

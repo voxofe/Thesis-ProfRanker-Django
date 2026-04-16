@@ -2,6 +2,13 @@ from django.db import models
 from datetime import time as dt_time
 from django.contrib.auth.hashers import make_password, check_password
 
+
+def vault_document_upload_path(instance, filename):
+    user_id = instance.user_id or "unknown"
+    if instance.source_application_id:
+        return f"documents/user_{user_id}/application_{instance.source_application_id}/{filename}"
+    return f"documents/user_{user_id}/profile/{filename}"
+
 class User(models.Model):
     ROLES = [
         ('admin', 'Admin'),
@@ -15,11 +22,6 @@ class User(models.Model):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
-    mobile_number = models.CharField(max_length=30, blank=True, null=True)
-    landline_number = models.CharField(max_length=30, blank=True, null=True)
-    street_address = models.CharField(max_length=255, blank=True, null=True)
-    city = models.CharField(max_length=120, blank=True, null=True)
-    postal_code = models.CharField(max_length=20, blank=True, null=True)
     role = models.CharField(max_length=10, choices=ROLES)
     gender = models.CharField(max_length=6, choices=GENDERS, blank=True, null=True)
     password = models.CharField(max_length=128)  # Store hashed password
@@ -37,24 +39,66 @@ class User(models.Model):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    preferred_scientific_field = models.ForeignKey(
-        "ScientificField",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="preferred_by_users",
-    )
-
-    cv_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
-    phd_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
-    doatap_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
-    course_plan_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
-    military_obligations_document = models.FileField(upload_to="profile_documents/", blank=True, null=True, max_length=255)
+    mobile_number = models.CharField(max_length=30, blank=True, null=True)
+    landline_number = models.CharField(max_length=30, blank=True, null=True)
+    street_address = models.CharField(max_length=255, blank=True, null=True)
+    city = models.CharField(max_length=120, blank=True, null=True)
+    postal_code = models.CharField(max_length=20, blank=True, null=True)
+    is_public_employee = models.BooleanField(default=False, blank=True, null=True)
+    is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)
+    has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)
+    phd_title = models.CharField(max_length=255, blank=True, null=True)
+    phd_acquisition_date = models.DateField(blank=True, null=True)
+    phd_is_from_foreign_institute = models.BooleanField(default=False, blank=True, null=True)
+    work_experience = models.IntegerField(blank=True, null=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Profile: {self.user.first_name} {self.user.last_name}"
+
+
+class VaultDocument(models.Model):
+    DOCUMENT_TYPES = [
+        ("cv", "CV"),
+        ("phd", "PhD"),
+        ("doatap", "DOATAP"),
+        ("course_plan", "Course Plan"),
+        ("military", "Military Obligations"),
+        ("public_employee_permission", "Public Employee Permission"),
+        ("not_participated_declaration", "Not Participated Declaration"),
+        ("eu_citizen_greek_language_certificate", "EU Citizen Greek Language Certificate"),
+        ("responsible_declaration", "Responsible Declaration"),
+        ("bio_supporting", "Bio Supporting"),
+        ("employment_certificate", "Employment Certificate"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="vault_documents")
+    doc_type = models.CharField(max_length=50, choices=DOCUMENT_TYPES)
+    file = models.FileField(upload_to=vault_document_upload_path, max_length=255)
+    is_default = models.BooleanField(default=False)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.doc_type} ({self.id})"
+
+
+class ApplicationDocument(models.Model):
+    application = models.ForeignKey(
+        "Application",
+        on_delete=models.CASCADE,
+        related_name="application_documents",
+    )
+    vault_document = models.ForeignKey(
+        VaultDocument,
+        on_delete=models.CASCADE,
+        related_name="application_links",
+    )
+    doc_type = models.CharField(max_length=50, choices=VaultDocument.DOCUMENT_TYPES)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Application {self.application_id} - {self.doc_type} ({self.vault_document_id})"
 
 class ScientificField(models.Model):
     name = models.CharField(max_length=255)
@@ -112,16 +156,6 @@ class Application(models.Model):
     has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)
     is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)
 
-    cv_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    phd_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    doatap_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    course_plan_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    military_obligations_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    public_employee_permission_document = models.FileField(upload_to="documents/", blank=True, null=True, max_length=255)
-    not_participated_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    eu_citizen_greek_language_certificate_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    responsible_declaration_document = models.FileField(upload_to='documents/', blank=True, null=True, max_length=255)
-    
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)
@@ -145,28 +179,6 @@ class Application(models.Model):
         if not self.user:
             return f"Application #{self.id}"
         return f"{self.user.first_name} {self.user.last_name} - {self.user.email}"
-
-class BioSupportingDocument(models.Model):
-    application = models.ForeignKey(
-        Application,
-        on_delete=models.CASCADE,
-        related_name="bio_supporting_documents",
-    )
-    file = models.FileField(upload_to="documents/", max_length=255)
-    
-    def __str__(self):
-        return f"Bio supporting document #{self.id} for application {self.application_id}"
-    
-class EmploymentCertificate(models.Model):
-    application = models.ForeignKey(
-        Application,
-        on_delete=models.CASCADE,
-        related_name="employment_certificates",
-    )
-    file = models.FileField(upload_to="documents/", max_length=255)
-
-    def __str__(self):
-        return f"Employment certificate #{self.id} for application {self.application_id}"
 
 class Paper(models.Model):
     application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name="papers")  # One-to-Many Relationship

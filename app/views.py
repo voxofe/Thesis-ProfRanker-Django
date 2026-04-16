@@ -6,7 +6,17 @@ from .serializers import ApplicationSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .models import Application, Paper, User, Position, ScientificField, Course, UserProfile, EmploymentCertificate, BioSupportingDocument
+from .models import (
+    Application,
+    Paper,
+    User,
+    Position,
+    ScientificField,
+    Course,
+    UserProfile,
+    VaultDocument,
+    ApplicationDocument,
+)
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 import time
@@ -16,6 +26,202 @@ from django.utils import timezone
 from zoneinfo import ZoneInfo
 from app.constants.departments import get_school_of_department
 import os
+
+SINGLE_DOC_TYPES = {
+    "cv",
+    "phd",
+    "doatap",
+    "course_plan",
+    "military",
+    "public_employee_permission",
+    "not_participated_declaration",
+    "eu_citizen_greek_language_certificate",
+    "responsible_declaration",
+}
+
+MULTI_DOC_TYPES = {
+    "bio_supporting",
+    "employment_certificate",
+}
+
+PROFILE_DOC_FIELD_MAP = {
+    "cvDocument": "cv",
+    "phdDocument": "phd",
+    "doatapDocument": "doatap",
+    "coursePlanDocument": "course_plan",
+    "militaryObligationsDocument": "military",
+    "publicEmployeePermissionDocument": "public_employee_permission",
+    "notParticipatedDeclarationDocument": "not_participated_declaration",
+    "euCitizenGreekLanguageCertificateDocument": "eu_citizen_greek_language_certificate",
+    "responsibleDeclarationDocument": "responsible_declaration",
+}
+
+
+def profile_doc_info(doc):
+    if not doc:
+        return {"id": None, "name": None, "downloadPath": None, "isDefault": False}
+    return {
+        "id": doc.id,
+        "name": os.path.basename(doc.file.name) if doc.file else None,
+        "downloadPath": f"/api/profile/documents/{doc.id}",
+        "isDefault": doc.is_default,
+        "uploadedAt": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+    }
+
+
+def get_default_profile_doc(user, doc_type):
+    default_doc = (
+        VaultDocument.objects.filter(
+            user=user, doc_type=doc_type, is_default=True
+        )
+        .order_by("-uploaded_at", "-id")
+        .first()
+    )
+    if default_doc:
+        return default_doc
+    return (
+        VaultDocument.objects.filter(user=user, doc_type=doc_type)
+        .order_by("-uploaded_at", "-id")
+        .first()
+    )
+
+
+def ensure_single_default(user, doc_type, keep_id=None):
+    queryset = VaultDocument.objects.filter(user=user, doc_type=doc_type)
+    if keep_id:
+        queryset = queryset.exclude(id=keep_id)
+    queryset.update(is_default=False)
+
+
+def cleanup_profile_doc_if_orphan(profile_doc):
+    if not profile_doc:
+        return
+    if ApplicationDocument.objects.filter(vault_document=profile_doc).exists():
+        return
+    user = profile_doc.user
+    doc_type = profile_doc.doc_type
+    if profile_doc.file:
+        profile_doc.file.delete(save=False)
+    profile_doc.delete()
+
+    if not VaultDocument.objects.filter(
+        user=user, doc_type=doc_type, is_default=True
+    ).exists():
+        fallback = (
+            VaultDocument.objects.filter(user=user, doc_type=doc_type)
+            .order_by("-uploaded_at", "-id")
+            .first()
+        )
+        if fallback:
+            fallback.is_default = True
+            fallback.save(update_fields=["is_default"])
+
+
+def build_application_document_maps(application):
+    links = (
+        ApplicationDocument.objects.filter(application=application)
+        .select_related("vault_document")
+        .order_by("-created_at", "-id")
+    )
+    if not links.exists():
+        return None, None, False
+
+    single_docs = {}
+    multi_docs = {"bio_supporting": [], "employment_certificate": []}
+
+    for link in links:
+        doc = link.vault_document
+        doc_info = {
+            "id": doc.id,
+            "name": os.path.basename(doc.file.name) if doc.file else None,
+            "downloadPath": f"/api/applications/{application.id}/documents/{doc.id}",
+        }
+        if link.doc_type in MULTI_DOC_TYPES:
+            multi_docs[link.doc_type].append(doc_info)
+        elif link.doc_type not in single_docs:
+            single_docs[link.doc_type] = doc_info
+
+    return single_docs, multi_docs, True
+
+
+def build_application_form(app):
+    single_docs, multi_docs, has_links = build_application_document_maps(app)
+
+    def single_doc_name(doc_type):
+        if has_links and doc_type in single_docs:
+            return single_docs[doc_type]["name"]
+        return None
+
+    def single_doc_id(doc_type):
+        if has_links and doc_type in single_docs:
+            return single_docs[doc_type]["id"]
+        return None
+
+    def multi_doc_list(doc_type, fallback_queryset=None):
+        if has_links:
+            return multi_docs.get(doc_type, [])
+        return []
+
+    return {
+        "id": app.id,
+        "positionId": app.position.id if app.position else None,
+        "phoneNumber": app.phone_number,
+        "landlineNumber": app.landline_number,
+        "streetAddress": app.street_address,
+        "city": app.city,
+        "postalCode": app.postal_code,
+        "isPublicEmployee": app.is_public_employee,
+        "phdTitle": app.phd_title,
+        "phdAcquisitionDate": app.phd_acquisition_date,
+        "phdIsFromForeignInstitute": app.phd_is_from_foreign_institute,
+        "scientificField": app.position.scientific_field.name if app.position else None,
+        "workExperience": app.work_experience,
+        "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
+        "isEuCitizenNonGreek": app.is_eu_citizen_non_greek,
+        "cvDocument": single_doc_name("cv"),
+        "cvDocumentId": single_doc_id("cv"),
+        "bioSupportingDocuments": multi_doc_list("bio_supporting"),
+        "phdDocument": single_doc_name("phd"),
+        "phdDocumentId": single_doc_id("phd"),
+        "doatapDocument": single_doc_name("doatap"),
+        "doatapDocumentId": single_doc_id("doatap"),
+        "coursePlanDocument": single_doc_name("course_plan"),
+        "coursePlanDocumentId": single_doc_id("course_plan"),
+        "militaryObligationsDocument": single_doc_name("military"),
+        "militaryObligationsDocumentId": single_doc_id("military"),
+        "employmentCertificates": multi_doc_list("employment_certificate"),
+        "publicEmployeePermissionDocument": single_doc_name("public_employee_permission"),
+        "publicEmployeePermissionDocumentId": single_doc_id(
+            "public_employee_permission"
+        ),
+        "notParticipatedDeclarationDocument": single_doc_name("not_participated_declaration"),
+        "notParticipatedDeclarationDocumentId": single_doc_id(
+            "not_participated_declaration"
+        ),
+        "euCitizenGreekLanguageCertificateDocument": single_doc_name(
+            "eu_citizen_greek_language_certificate"
+        ),
+        "euCitizenGreekLanguageCertificateDocumentId": single_doc_id(
+            "eu_citizen_greek_language_certificate"
+        ),
+        "responsibleDeclarationDocument": single_doc_name("responsible_declaration"),
+        "responsibleDeclarationDocumentId": single_doc_id("responsible_declaration"),
+        "papers": [
+            {
+                "id": paper.id,
+                "type": paper.type,
+                "paperTitle": paper.paper_title,
+                "journalConfTitle": paper.journal_conf_title,
+                "year": paper.year,
+                "issn": paper.issn,
+                "country": paper.country,
+                "quartile": paper.quartile
+            }
+            for paper in app.papers.all()
+        ],
+        "positionEndDate": app.position.end_date if app.position else None,
+        "positionStartDate": app.position.start_date if app.position else None,
+    }
 
 # Register
 @csrf_exempt
@@ -120,86 +326,32 @@ def get_user_by_token(request):
         return JsonResponse({"error": "User not found"}, status=404)
 
     # Prepare user data in camelCase
+    profile = UserProfile.objects.filter(user=user).first()
+
     user_data = {
         "id": user.id,
         "firstName": user.first_name,
         "lastName": user.last_name,
         "email": user.email,
-        "mobileNumber": user.mobile_number,
-        "landlineNumber": user.landline_number,
-        "streetAddress": user.street_address,
-        "city": user.city,
-        "postalCode": user.postal_code,
+        "mobileNumber": profile.mobile_number if profile else None,
+        "landlineNumber": profile.landline_number if profile else None,
+        "streetAddress": profile.street_address if profile else None,
+        "city": profile.city if profile else None,
+        "postalCode": profile.postal_code if profile else None,
         "role": user.role,
         "gender": user.gender,
     }
+    include = (request.query_params.get("include") or "").lower()
+    include_apps = "applications" in include
+
+    if not include_apps:
+        return JsonResponse(user_data, safe=False)
+
     user_data["applications"] = []
-
-    def get_filename(filefield):
-        if filefield and filefield.name:
-            return filefield.name.split('/')[-1]
-        return None
-
-    def build_application_form(app):
-        return {
-            "id": app.id,
-            "positionId": app.position.id if app.position else None,
-            "phoneNumber": app.phone_number,
-            "landlineNumber": app.landline_number,
-            "streetAddress": app.street_address,
-            "city": app.city,
-            "postalCode": app.postal_code,
-            "isPublicEmployee": app.is_public_employee,
-            "phdTitle": app.phd_title,
-            "phdAcquisitionDate": app.phd_acquisition_date,
-            "phdIsFromForeignInstitute": app.phd_is_from_foreign_institute,
-            "scientificField": app.position.scientific_field.name if app.position else None,
-            "workExperience": app.work_experience,
-            "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
-            "isEuCitizenNonGreek": app.is_eu_citizen_non_greek,
-            "cvDocument": get_filename(app.cv_document),
-            "bioSupportingDocuments": [
-                {
-                    "id": doc.id,
-                    "name": get_filename(doc.file),
-                }
-                for doc in app.bio_supporting_documents.all()
-            ],
-            "phdDocument": get_filename(app.phd_document),
-            "doatapDocument": get_filename(app.doatap_document),
-            "coursePlanDocument": get_filename(app.course_plan_document),
-            "militaryObligationsDocument": get_filename(app.military_obligations_document),
-            "employmentCertificates": [
-                {
-                    "id": cert.id,
-                    "name": get_filename(cert.file),
-                }
-                for cert in app.employment_certificates.all()
-            ],
-            "publicEmployeePermissionDocument": get_filename(app.public_employee_permission_document),
-            "notParticipatedDeclarationDocument": get_filename(app.not_participated_declaration_document),
-            "euCitizenGreekLanguageCertificateDocument": get_filename(app.eu_citizen_greek_language_certificate_document),
-            "responsibleDeclarationDocument": get_filename(app.responsible_declaration_document),
-            "papers": [
-                {
-                    "id": paper.id,
-                    "type": paper.type,
-                    "paperTitle": paper.paper_title,
-                    "journalConfTitle": paper.journal_conf_title,
-                    "year": paper.year,
-                    "issn": paper.issn,
-                    "country": paper.country,
-                    "quartile": paper.quartile
-                }
-                for paper in app.papers.all()
-            ],
-            "positionEndDate": app.position.end_date if app.position else None,
-            "positionStartDate": app.position.start_date if app.position else None,
-        }
 
     applications = list(
         user.applications.select_related("position", "position__scientific_field")
-        .prefetch_related("bio_supporting_documents", "employment_certificates", "papers")
+        .prefetch_related("papers")
         .order_by("-submitted_at", "-id")
     )
     if applications:
@@ -212,20 +364,6 @@ def get_user_by_token(request):
 
 def build_profile_response(user, profile, applications=None):
     tz = ZoneInfo("Europe/Athens")
-
-    def file_info(file_field, key):
-        if not file_field:
-            return {"name": None, "downloadPath": None}
-        return {
-            "name": file_field.name.split("/")[-1],
-            "downloadPath": f"/api/profile/documents/{key}",
-        }
-
-    preferred_sf = profile.preferred_scientific_field
-    if not preferred_sf and applications:
-        first_app = applications[0]
-        if first_app.position:
-            preferred_sf = first_app.position.scientific_field
 
     applications_data = []
     for application in applications or []:
@@ -247,29 +385,53 @@ def build_profile_response(user, profile, applications=None):
             }
         )
 
+    document_vault = {}
+    for doc in VaultDocument.objects.filter(user=user).order_by("-uploaded_at", "-id"):
+        document_vault.setdefault(doc.doc_type, []).append(profile_doc_info(doc))
+
     return {
         "user": {
             "id": user.id,
             "firstName": user.first_name,
             "lastName": user.last_name,
             "email": user.email,
-            "mobileNumber": user.mobile_number,
-            "landlineNumber": user.landline_number,
-            "streetAddress": user.street_address,
-            "city": user.city,
-            "postalCode": user.postal_code,
+            "mobileNumber": profile.mobile_number,
+            "landlineNumber": profile.landline_number,
+            "streetAddress": profile.street_address,
+            "city": profile.city,
+            "postalCode": profile.postal_code,
             "role": user.role,
             "gender": user.gender,
         },
-        "preferredScientificFieldId": preferred_sf.id if preferred_sf else None,
-        "preferredScientificFieldLabel": preferred_sf.name if preferred_sf else "",
-        "documents": {
-            "cv": file_info(profile.cv_document, "cv"),
-            "phd": file_info(profile.phd_document, "phd"),
-            "doatap": file_info(profile.doatap_document, "doatap"),
-            "coursePlan": file_info(profile.course_plan_document, "coursePlan"),
-            "military": file_info(profile.military_obligations_document, "military"),    
+        "applicationDefaults": {
+            "isPublicEmployee": bool(profile.is_public_employee),
+            "isEuCitizenNonGreek": bool(profile.is_eu_citizen_non_greek),
+            "hasNotParticipatedInPastProgram": bool(profile.has_not_participated_in_past_program),
+            "phdTitle": profile.phd_title,
+            "phdAcquisitionDate": profile.phd_acquisition_date,
+            "phdIsFromForeignInstitute": bool(profile.phd_is_from_foreign_institute),
+            "workExperience": profile.work_experience,
         },
+        "documents": {
+            "cv": profile_doc_info(get_default_profile_doc(user, "cv")),
+            "phd": profile_doc_info(get_default_profile_doc(user, "phd")),
+            "doatap": profile_doc_info(get_default_profile_doc(user, "doatap")),
+            "coursePlan": profile_doc_info(get_default_profile_doc(user, "course_plan")),
+            "military": profile_doc_info(get_default_profile_doc(user, "military")),
+            "publicEmployeePermission": profile_doc_info(
+                get_default_profile_doc(user, "public_employee_permission")
+            ),
+            "notParticipatedDeclaration": profile_doc_info(
+                get_default_profile_doc(user, "not_participated_declaration")
+            ),
+            "euCitizenGreekLanguageCertificate": profile_doc_info(
+                get_default_profile_doc(user, "eu_citizen_greek_language_certificate")
+            ),
+            "responsibleDeclaration": profile_doc_info(
+                get_default_profile_doc(user, "responsible_declaration")
+            ),
+        },
+        "documentVault": document_vault,
         "applications": applications_data,
     }
 
@@ -298,6 +460,15 @@ def profile_detail(request):
 
     if request.method == "PUT":
         data = request.data
+        application_defaults = data.get("applicationDefaults")
+        if isinstance(application_defaults, str):
+            try:
+                application_defaults = json.loads(application_defaults)
+            except json.JSONDecodeError:
+                application_defaults = {}
+        if application_defaults is None:
+            application_defaults = {}
+
         first_name = data.get("firstName")
         last_name = data.get("lastName")
         email = data.get("email")
@@ -307,7 +478,38 @@ def profile_detail(request):
         city = data.get("city")
         postal_code = data.get("postalCode")
         gender = data.get("gender")
-        preferred_sf_id = data.get("preferredScientificFieldId")
+
+        is_public_employee = application_defaults.get(
+            "isPublicEmployee", data.get("isPublicEmployee")
+        )
+        is_eu_citizen_non_greek = application_defaults.get(
+            "isEuCitizenNonGreek", data.get("isEuCitizenNonGreek")
+        )
+        has_not_participated_in_past_program = application_defaults.get(
+            "hasNotParticipatedInPastProgram",
+            data.get("hasNotParticipatedInPastProgram"),
+        )
+        phd_title = application_defaults.get("phdTitle", data.get("phdTitle"))
+        phd_acquisition_date = application_defaults.get(
+            "phdAcquisitionDate", data.get("phdAcquisitionDate")
+        )
+        phd_is_from_foreign_institute = application_defaults.get(
+            "phdIsFromForeignInstitute", data.get("phdIsFromForeignInstitute")
+        )
+        work_experience = application_defaults.get(
+            "workExperience", data.get("workExperience")
+        )
+
+        def coerce_bool(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"true", "1", "yes"}:
+                    return True
+                if lowered in {"false", "0", "no"}:
+                    return False
+            return bool(value) if value is not None else None
 
         if email and email != user.email and User.objects.filter(email=email).exists():
             return JsonResponse({"error": "Email already registered."}, status=400)
@@ -319,26 +521,46 @@ def profile_detail(request):
         if email is not None:
             user.email = email
         if mobile_number is not None:
-            user.mobile_number = mobile_number
+            profile.mobile_number = mobile_number
         if landline_number is not None:
-            user.landline_number = landline_number
+            profile.landline_number = landline_number
         if street_address is not None:
-            user.street_address = street_address
+            profile.street_address = street_address
         if city is not None:
-            user.city = city
+            profile.city = city
         if postal_code is not None:
-            user.postal_code = postal_code
+            profile.postal_code = postal_code
         if gender in {"male", "female", None, ""}:
             user.gender = gender or None
         user.save()
 
-        if preferred_sf_id in [None, "", "null"]:
-            profile.preferred_scientific_field = None
-        else:
-            sf = ScientificField.objects.filter(id=preferred_sf_id).first()
-            if not sf:
-                return JsonResponse({"error": "Scientific field not found."}, status=404)
-            profile.preferred_scientific_field = sf
+        if is_public_employee is not None:
+            profile.is_public_employee = coerce_bool(is_public_employee)
+        if is_eu_citizen_non_greek is not None:
+            profile.is_eu_citizen_non_greek = coerce_bool(is_eu_citizen_non_greek)
+        if has_not_participated_in_past_program is not None:
+            profile.has_not_participated_in_past_program = coerce_bool(
+                has_not_participated_in_past_program
+            )
+        if phd_title is not None:
+            profile.phd_title = phd_title or None
+        if phd_acquisition_date is not None:
+            profile.phd_acquisition_date = (
+                phd_acquisition_date or None
+            )
+        if phd_is_from_foreign_institute is not None:
+            profile.phd_is_from_foreign_institute = coerce_bool(
+                phd_is_from_foreign_institute
+            )
+        if work_experience is not None:
+            if work_experience == "":
+                profile.work_experience = None
+            else:
+                try:
+                    profile.work_experience = int(work_experience)
+                except (TypeError, ValueError):
+                    profile.work_experience = None
+
         profile.save()
 
     response = build_profile_response(user, profile, applications)
@@ -363,23 +585,17 @@ def profile_documents_upload(request):
 
     profile, _ = UserProfile.objects.get_or_create(user=user)
 
-    field_map = {
-        "cvDocument": "cv_document",
-        "phdDocument": "phd_document",
-        "doatapDocument": "doatap_document",
-        "coursePlanDocument": "course_plan_document",
-        "militaryObligationsDocument": "military_obligations_document",
-    }
-
-    for incoming, model_field in field_map.items():
+    for incoming, doc_type in PROFILE_DOC_FIELD_MAP.items():
         new_file = request.FILES.get(incoming)
         if new_file:
-            old_file = getattr(profile, model_field)
-            if old_file:
-                old_file.delete(save=False)
-            setattr(profile, model_field, new_file)
-
-    profile.save()
+            profile_doc = VaultDocument.objects.create(
+                user=user,
+                doc_type=doc_type,
+                file=new_file,
+                is_default=True,
+            )
+            if doc_type in SINGLE_DOC_TYPES:
+                ensure_single_default(user, doc_type, keep_id=profile_doc.id)
     applications = list(
         Application.objects.filter(user=user)
         .select_related("position", "position__scientific_field")
@@ -408,15 +624,27 @@ def profile_document_download(request, doc_key):
     if not profile:
         return JsonResponse({"error": "Profile not found."}, status=404)
 
-    document_map = {
-        "cv": profile.cv_document,
-        "phd": profile.phd_document,
-        "doatap": profile.doatap_document,
-        "coursePlan": profile.course_plan_document,
-        "military": profile.military_obligations_document,
+    doc_type_map = {
+        "cv": "cv",
+        "phd": "phd",
+        "doatap": "doatap",
+        "course_plan": "course_plan",
+        "courseplan": "course_plan",
+        "coursePlan": "course_plan",
+        "military": "military",
     }
 
-    file_field = document_map.get(doc_key)
+    file_field = None
+    if str(doc_key).isdigit():
+        profile_doc = VaultDocument.objects.filter(
+            id=int(doc_key), user=user
+        ).first()
+        file_field = profile_doc.file if profile_doc else None
+    else:
+        mapped_type = doc_type_map.get(doc_key, doc_key)
+        profile_doc = get_default_profile_doc(user, mapped_type)
+        file_field = profile_doc.file if profile_doc else None
+
     if not file_field or not file_field.name:
         return JsonResponse({"error": "Document not found."}, status=404)
 
@@ -500,57 +728,125 @@ def handle_form_submission(request):
             application.has_not_participated_in_past_program = form_data.get("hasNotParticipatedInPastProgram") == "true"
             application.is_eu_citizen_non_greek = form_data.get("isEuCitizenNonGreek") == "true"
 
-            # --- Handle file fields (replace if new file uploaded) ---
-            def handle_file(field_name, new_file):
-                old_file = getattr(application, field_name)
-                if new_file:
-                    # Always delete the old file if it exists, even if the name is the same
-                    if old_file:
-                        old_file.delete(save=False)
-                    setattr(application, field_name, new_file)
-                # If no new file, keep the old one
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.is_public_employee = application.is_public_employee
+            profile.is_eu_citizen_non_greek = application.is_eu_citizen_non_greek
+            profile.has_not_participated_in_past_program = application.has_not_participated_in_past_program
+            profile.phd_title = application.phd_title
+            profile.phd_acquisition_date = application.phd_acquisition_date
+            profile.phd_is_from_foreign_institute = application.phd_is_from_foreign_institute
+            profile.work_experience = application.work_experience
+            profile.save()
 
-            handle_file("cv_document", request.FILES.get("cvDocument"))
-            handle_file("phd_document", request.FILES.get("phdDocument"))
-            handle_file("doatap_document", request.FILES.get("doatapDocument"))
-            handle_file("course_plan_document", request.FILES.get("coursePlanDocument"))
-            handle_file("military_obligations_document", request.FILES.get("militaryObligationsDocument"))
-            handle_file("public_employee_permission_document", request.FILES.get("publicEmployeePermissionDocument"))
-            handle_file("not_participated_declaration_document", request.FILES.get("notParticipatedDeclarationDocument"))
-            handle_file("eu_citizen_greek_language_certificate_document", request.FILES.get("euCitizenGreekLanguageCertificateDocument"))
-            handle_file("responsible_declaration_document", request.FILES.get("responsibleDeclarationDocument"))
+            def handle_profile_doc_upload(field_key, doc_type):
+                new_file = request.FILES.get(field_key)
+                doc_id_key = f"{field_key}Id"
+                doc_id_value = form_data.get(doc_id_key)
+
+                if new_file:
+                    profile_doc = VaultDocument(
+                        user=user,
+                        doc_type=doc_type,
+                        file=new_file,
+                        is_default=True,
+                    )
+                    profile_doc.application_id = application.id
+                    profile_doc.save()
+                    if doc_type in SINGLE_DOC_TYPES:
+                        ensure_single_default(user, doc_type, keep_id=profile_doc.id)
+
+                    ApplicationDocument.objects.filter(
+                        application=application,
+                        doc_type=doc_type,
+                    ).delete()
+                    ApplicationDocument.objects.create(
+                        application=application,
+                    vault_document=profile_doc,
+                        doc_type=doc_type,
+                    )
+                    return
+
+                if doc_id_value is None:
+                    return
+
+                if str(doc_id_value).strip() == "":
+                    links = ApplicationDocument.objects.filter(
+                        application=application,
+                        doc_type=doc_type,
+                    )
+                    for link in links:
+                        profile_doc = link.vault_document
+                        link.delete()
+                        cleanup_profile_doc_if_orphan(profile_doc)
+                    return
+
+                profile_doc = VaultDocument.objects.filter(
+                    id=doc_id_value,
+                    user=user,
+                    doc_type=doc_type,
+                ).first()
+                if profile_doc:
+                    ApplicationDocument.objects.filter(
+                        application=application,
+                        doc_type=doc_type,
+                    ).delete()
+                    ApplicationDocument.objects.create(
+                        application=application,
+                        vault_document=profile_doc,
+                        doc_type=doc_type,
+                    )
+
+            for field_key, doc_type in PROFILE_DOC_FIELD_MAP.items():
+                handle_profile_doc_upload(field_key, doc_type)
 
             application.save()
 
-            bio_supporting_document_files = request.FILES.getlist("bioSupportingDocuments")
-            if bio_supporting_document_files:
-                for doc in application.bio_supporting_documents.all():
-                    if doc.file:
-                        doc.file.delete(save=False)
-                    doc.delete()
+            def handle_multi_docs(field_key, doc_type, keep_ids_key=None):
+                new_files = request.FILES.getlist(field_key)
+                keep_ids = None
+                if keep_ids_key and form_data.get(keep_ids_key):
+                    try:
+                        keep_ids = set(json.loads(form_data.get(keep_ids_key, "[]")))
+                    except json.JSONDecodeError:
+                        keep_ids = None
 
-                for doc_file in bio_supporting_document_files:
-                    if doc_file:
-                        BioSupportingDocument.objects.create(
-                            application=application,
-                            file=doc_file,
-                        )
+                if keep_ids is not None:
+                    links = ApplicationDocument.objects.filter(
+                        application=application,
+                        doc_type=doc_type,
+                    )
+                    for link in links.exclude(vault_document_id__in=keep_ids):
+                        profile_doc = link.vault_document
+                        link.delete()
+                        cleanup_profile_doc_if_orphan(profile_doc)
 
-            employment_certificate_files = request.FILES.getlist("employmentCertificateDocuments")
-            should_replace_employment_certificates = bool(employment_certificate_files)
+                for doc_file in new_files:
+                    if not doc_file:
+                        continue
+                    profile_doc = VaultDocument(
+                        user=user,
+                        doc_type=doc_type,
+                        file=doc_file,
+                        is_default=True,
+                    )
+                    profile_doc.application_id = application.id
+                    profile_doc.save()
+                    ApplicationDocument.objects.create(
+                        application=application,
+                        vault_document=profile_doc,
+                        doc_type=doc_type,
+                    )
 
-            if should_replace_employment_certificates:
-                for cert in application.employment_certificates.all():
-                    if cert.file:
-                        cert.file.delete(save=False)
-                    cert.delete()
-
-                for cert_file in employment_certificate_files:
-                    if cert_file:
-                        EmploymentCertificate.objects.create(
-                            application=application,
-                            file=cert_file,
-                        )
+            handle_multi_docs(
+                "bioSupportingDocuments",
+                "bio_supporting",
+                keep_ids_key="bioSupportingDocumentIds",
+            )
+            handle_multi_docs(
+                "employmentCertificateDocuments",
+                "employment_certificate",
+                keep_ids_key="employmentCertificateDocumentIds",
+            )
 
             # --- Papers resubmission logic ---
             # Build a dict of existing papers for quick lookup
@@ -685,6 +981,20 @@ def get_applicant_score(request, application_id):
             "downloadPath": download_path,
         }
 
+    single_docs, multi_docs, has_links = build_application_document_maps(application)
+
+    def linked_doc_info(doc_type):
+        if has_links and doc_type in single_docs:
+            doc_id = single_docs[doc_type]["id"]
+            vault_doc = VaultDocument.objects.filter(id=doc_id).first()
+            if vault_doc and vault_doc.file:
+                return {
+                    "url": request.build_absolute_uri(vault_doc.file.url),
+                    "name": os.path.basename(vault_doc.file.name),
+                    "downloadPath": f"/api/applications/{application.id}/documents/{doc_id}",
+                }
+        return {"url": None, "name": None, "downloadPath": None}
+
     data = {
         "id": user.id,
         "firstName": user.first_name,
@@ -737,37 +1047,48 @@ def get_applicant_score(request, application_id):
         "positionStartTime": application.position.start_time.strftime("%H:%M") if application.position and application.position.start_time else "",
         "positionEndTime": application.position.end_time.strftime("%H:%M") if application.position and application.position.end_time else "",
         "documents": {
-            "cv": file_info(application.cv_document, "cv"),
-            "bioSupportingDocuments": [
-                {
-                    "id": doc.id,
-                    "url": request.build_absolute_uri(doc.file.url),
-                    "name": doc.file.name.split("/")[-1] if doc.file else None,
-                    "downloadPath": None,
-                }
-                for doc in application.bio_supporting_documents.all()
-                if doc.file
-            ],
-            "phd": file_info(application.phd_document, "phd"),
-            "doatap": file_info(application.doatap_document, "doatap"),
-            "coursePlan": file_info(application.course_plan_document, "coursePlan"),
-            "military": file_info(application.military_obligations_document, "military"),
-            "employmentCertificates": [
-                {
-                    "id": cert.id,
-                    "url": request.build_absolute_uri(cert.file.url),
-                    "name": cert.file.name.split("/")[-1] if cert.file else None,
-                    "downloadPath": f"/api/applicant/{application.id}/employment-certificates/{cert.id}",
-                }
-                for cert in application.employment_certificates.all()
-                if cert.file
-            ],
-            "publicEmployeePermission": file_info(application.public_employee_permission_document, "publicEmployeePermission"),
-            "notParticipatedDeclaration": file_info(application.not_participated_declaration_document, "notParticipatedDeclaration"),
-            "euCitizenGreekLanguageCertificate": file_info(application.eu_citizen_greek_language_certificate_document, "euCitizenGreekLanguageCertificate"),
-            "responsibleDeclaration": file_info(application.responsible_declaration_document, "responsibleDeclaration"),
+            "cv": linked_doc_info("cv"),
+            "bioSupportingDocuments": multi_docs.get("bio_supporting", []) if has_links else [],
+            "phd": linked_doc_info("phd"),
+            "doatap": linked_doc_info("doatap"),
+            "coursePlan": linked_doc_info("course_plan"),
+            "military": linked_doc_info("military"),
+            "employmentCertificates": multi_docs.get("employment_certificate", []) if has_links else [],
+            "publicEmployeePermission": linked_doc_info("public_employee_permission"),
+            "notParticipatedDeclaration": linked_doc_info("not_participated_declaration"),
+            "euCitizenGreekLanguageCertificate": linked_doc_info(
+                "eu_citizen_greek_language_certificate"
+            ),
+            "responsibleDeclaration": linked_doc_info("responsible_declaration"),
         },
     }
+    return JsonResponse(data, safe=False)
+
+
+@api_view(["GET"])
+def get_application_detail(request, application_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    requesting_user = User.objects.filter(id=user_id).first()
+    if not requesting_user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    application = get_object_or_404(
+        Application.objects.select_related("position", "position__scientific_field"),
+        id=application_id,
+    )
+
+    if requesting_user.role != "admin" and requesting_user.id != application.user_id:
+        return JsonResponse({"error": "Forbidden."}, status=403)
+
+    data = build_application_form(application)
     return JsonResponse(data, safe=False)
 
 
@@ -790,28 +1111,34 @@ def download_applicant_document(request, application_id, doc_key):
 
     if requesting_user.role != "admin" and requesting_user.id != application.user_id:
         return JsonResponse({"error": "Forbidden."}, status=403)
-    document_map = {
-        "cv": application.cv_document,
-        "phd": application.phd_document,
-        "doatap": application.doatap_document,
-        "coursePlan": application.course_plan_document,
-        "military": application.military_obligations_document,
-        "employmentCertificate": (
-            application.employment_certificates.first().file
-            if application.employment_certificates.exists()
-            else None
-        ),
-        "publicEmployeePermission": application.public_employee_permission_document,
-        "notParticipatedDeclaration": application.not_participated_declaration_document,
-        "euCitizenGreekLanguageCertificate": application.eu_citizen_greek_language_certificate_document,
-        "responsibleDeclaration": application.responsible_declaration_document,
-    }
+    file_field = None
+    if str(doc_key).isdigit():
+        link = ApplicationDocument.objects.filter(
+            application=application,
+            vault_document_id=int(doc_key),
+        ).select_related("vault_document").first()
+        file_field = link.vault_document.file if link else None
+    else:
+        doc_key_map = {
+            "cv": "cv",
+            "phd": "phd",
+            "doatap": "doatap",
+            "coursePlan": "course_plan",
+            "military": "military",
+            "publicEmployeePermission": "public_employee_permission",
+            "notParticipatedDeclaration": "not_participated_declaration",
+            "euCitizenGreekLanguageCertificate": "eu_citizen_greek_language_certificate",
+            "responsibleDeclaration": "responsible_declaration",
+        }
+        doc_type = doc_key_map.get(str(doc_key), str(doc_key))
+        link = ApplicationDocument.objects.filter(
+            application=application,
+            doc_type=doc_type,
+        ).select_related("vault_document").first()
+        file_field = link.vault_document.file if link else None
 
-    file_field = document_map.get(doc_key)
-    if not file_field:
+    if not file_field or not file_field.name:
         return JsonResponse({"error": "Document not found."}, status=404)
-    if not file_field.name:
-        return JsonResponse({"error": "Document not available."}, status=404)
 
     filename = os.path.basename(file_field.name)
     response = FileResponse(file_field.open("rb"), as_attachment=True, filename=filename)
