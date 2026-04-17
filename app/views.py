@@ -498,6 +498,7 @@ def profile_detail(request):
         city = data.get("city")
         postal_code = data.get("postalCode")
         gender = data.get("gender")
+        has_gender = "gender" in data
 
         is_public_employee = application_defaults.get(
             "isPublicEmployee", data.get("isPublicEmployee")
@@ -571,7 +572,7 @@ def profile_detail(request):
             profile.city = city
         if postal_code is not None:
             profile.postal_code = postal_code
-        if gender in {"male", "female", None, ""}:
+        if has_gender and gender in {"male", "female", None, ""}:
             user.gender = gender or None
         user.save()
 
