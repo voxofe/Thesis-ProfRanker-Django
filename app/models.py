@@ -5,8 +5,9 @@ from django.contrib.auth.hashers import make_password, check_password
 
 def vault_document_upload_path(instance, filename):
     user_id = instance.user_id or "unknown"
-    if instance.source_application_id:
-        return f"documents/user_{user_id}/application_{instance.source_application_id}/{filename}"
+    application_id = getattr(instance, "application_id", None)
+    if application_id:
+        return f"documents/user_{user_id}/application_{application_id}/{filename}"
     return f"documents/user_{user_id}/profile/{filename}"
 
 class User(models.Model):

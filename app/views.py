@@ -26,6 +26,22 @@ from django.utils import timezone
 from zoneinfo import ZoneInfo
 from app.constants.departments import get_school_of_department
 import os
+import mimetypes
+
+MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
+ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
+
+
+def validate_vault_file(uploaded_file):
+    if not uploaded_file:
+        return "Missing file."
+    if uploaded_file.size and uploaded_file.size > MAX_VAULT_UPLOAD_BYTES:
+        return "Το αρχείο πρέπει να είναι έως 5MB."
+    filename = uploaded_file.name or ""
+    _, ext = os.path.splitext(filename.lower())
+    if ext not in ALLOWED_VAULT_EXTENSIONS:
+        return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
+    return None
 
 SINGLE_DOC_TYPES = {
     "cv",
@@ -65,6 +81,7 @@ def profile_doc_info(doc):
         "name": os.path.basename(doc.file.name) if doc.file else None,
         "downloadPath": f"/api/profile/documents/{doc.id}",
         "isDefault": doc.is_default,
+        "isUsed": ApplicationDocument.objects.filter(vault_document=doc).exists(),
         "uploadedAt": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
     }
 
@@ -673,9 +690,100 @@ def profile_document_download(request, doc_key):
         return JsonResponse({"error": "Document not found."}, status=404)
 
     filename = os.path.basename(file_field.name)
-    response = FileResponse(file_field.open("rb"), as_attachment=True, filename=filename)
-    response["Content-Type"] = "application/octet-stream"
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    response = FileResponse(
+        file_field.open("rb"),
+        as_attachment=True,
+        filename=filename,
+        content_type=content_type,
+    )
     return response
+
+
+@api_view(["PUT", "DELETE"])
+@parser_classes([MultiPartParser, FormParser])
+def profile_document_manage(request, doc_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    profile_doc = VaultDocument.objects.filter(id=doc_id, user=user).first()
+    if not profile_doc:
+        return JsonResponse({"error": "Document not found."}, status=404)
+
+    if ApplicationDocument.objects.filter(vault_document=profile_doc).exists():
+        return JsonResponse(
+            {
+                "error": "Το δικαιολογητικό χρησιμοποιείται σε υποβλημένη αίτηση και δεν μπορεί να τροποποιηθεί.",
+            },
+            status=400,
+        )
+
+    if request.method == "PUT":
+        new_file = request.FILES.get("file")
+        validation_error = validate_vault_file(new_file)
+        if validation_error:
+            return JsonResponse({"error": validation_error}, status=400)
+
+        if profile_doc.file:
+            profile_doc.file.delete(save=False)
+        profile_doc.file = new_file
+        profile_doc.uploaded_at = timezone.now()
+        profile_doc.save(update_fields=["file", "uploaded_at"])
+
+        return JsonResponse(profile_doc_info(profile_doc), safe=False)
+
+    if request.method == "DELETE":
+        cleanup_profile_doc_if_orphan(profile_doc)
+        return JsonResponse({"status": "deleted"}, status=200)
+
+    return JsonResponse({"error": "Invalid request method"}, status=405)
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+def profile_document_create(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    doc_type = request.data.get("docType")
+    if doc_type not in SINGLE_DOC_TYPES and doc_type not in MULTI_DOC_TYPES:
+        return JsonResponse({"error": "Invalid document type."}, status=400)
+
+    new_file = request.FILES.get("file")
+    validation_error = validate_vault_file(new_file)
+    if validation_error:
+        return JsonResponse({"error": validation_error}, status=400)
+
+    profile_doc = VaultDocument.objects.create(
+        user=user,
+        doc_type=doc_type,
+        file=new_file,
+        is_default=True,
+    )
+    if doc_type in SINGLE_DOC_TYPES:
+        ensure_single_default(user, doc_type, keep_id=profile_doc.id)
+
+    return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
 # Handle Form Submission
 def process_paper(paper):
