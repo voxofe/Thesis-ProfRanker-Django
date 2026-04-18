@@ -8,7 +8,7 @@ def vault_document_upload_path(instance, filename):
     application_id = getattr(instance, "application_id", None)
     if application_id:
         return f"documents/user_{user_id}/application_{application_id}/{filename}"
-    return f"documents/user_{user_id}/profile/{filename}"
+    return f"documents/user_{user_id}/vault/{filename}"
 
 class User(models.Model):
     ROLES = [
@@ -72,6 +72,7 @@ class VaultDocument(models.Model):
         ("responsible_declaration", "Responsible Declaration"),
         ("bio_supporting", "Bio Supporting"),
         ("employment_certificate", "Employment Certificate"),
+        ("other", "Other"),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="vault_documents")

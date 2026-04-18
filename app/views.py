@@ -21,6 +21,7 @@ from .models import (
 )
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
+from django.core.files.base import File
 import time
 import json
 from datetime import datetime, time as dt_time
@@ -60,6 +61,7 @@ SINGLE_DOC_TYPES = {
 MULTI_DOC_TYPES = {
     "bio_supporting",
     "employment_certificate",
+    "other",
 }
 
 PROFILE_DOC_FIELD_MAP = {
@@ -117,6 +119,37 @@ def ensure_single_default(user, doc_type, keep_id=None):
     queryset.update(is_default=False)
 
 
+def build_vault_path(user_id, filename):
+    return f"documents/user_{user_id}/vault/{filename}"
+
+
+def build_application_path(user_id, application_id, filename):
+    return f"documents/user_{user_id}/application_{application_id}/{filename}"
+
+
+def move_vault_document_file(profile_doc, target_path):
+    if not profile_doc or not profile_doc.file or not profile_doc.file.name:
+        return
+    if os.path.dirname(profile_doc.file.name) == os.path.dirname(target_path):
+        return
+
+    storage = profile_doc.file.storage
+    old_name = profile_doc.file.name
+    target_name = storage.get_available_name(target_path)
+    with profile_doc.file.open("rb") as source_file:
+        new_name = storage.save(target_name, File(source_file))
+    profile_doc.file.name = new_name
+    profile_doc.save(update_fields=["file"])
+    if storage.exists(old_name):
+        storage.delete(old_name)
+
+
+def ensure_doc_in_application_folder(profile_doc, application_id):
+    filename = os.path.basename(profile_doc.file.name or "document")
+    target_path = build_application_path(profile_doc.user_id, application_id, filename)
+    move_vault_document_file(profile_doc, target_path)
+
+
 def cleanup_profile_doc_if_orphan(profile_doc):
     if not profile_doc:
         return
@@ -126,6 +159,10 @@ def cleanup_profile_doc_if_orphan(profile_doc):
         models.Q(vault_document=profile_doc) | models.Q(doatap_document=profile_doc)
     ).exists():
         return
+    if profile_doc.file and profile_doc.file.name:
+        filename = os.path.basename(profile_doc.file.name)
+        target_path = build_vault_path(profile_doc.user_id, filename)
+        move_vault_document_file(profile_doc, target_path)
     if not VaultDocument.objects.filter(
         user=profile_doc.user, doc_type=profile_doc.doc_type, is_default=True
     ).exists():
@@ -773,7 +810,24 @@ def profile_document_manage(request, doc_id):
         return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
     if request.method == "DELETE":
-        cleanup_profile_doc_if_orphan(profile_doc)
+        doc_type = profile_doc.doc_type
+        was_default = profile_doc.is_default
+        if profile_doc.file:
+            profile_doc.file.delete(save=False)
+        profile_doc.delete()
+
+        if doc_type in SINGLE_DOC_TYPES and was_default:
+            replacement = (
+                VaultDocument.objects.filter(user=user, doc_type=doc_type)
+                .order_by("-uploaded_at", "-id")
+                .first()
+            )
+            if replacement:
+                ensure_single_default(user, doc_type, keep_id=replacement.id)
+                if not replacement.is_default:
+                    replacement.is_default = True
+                    replacement.save(update_fields=["is_default"])
+
         return JsonResponse({"status": "deleted"}, status=200)
 
     return JsonResponse({"error": "Invalid request method"}, status=405)
@@ -950,6 +1004,7 @@ def handle_form_submission(request):
                     doc_type=doc_type,
                 ).first()
                 if profile_doc:
+                    ensure_doc_in_application_folder(profile_doc, application.id)
                     ApplicationDocument.objects.filter(
                         application=application,
                         doc_type=doc_type,
@@ -1033,6 +1088,7 @@ def handle_form_submission(request):
                         for doc in VaultDocument.objects.filter(
                             id__in=missing_ids, user=user, doc_type=doc_type
                         ):
+                            ensure_doc_in_application_folder(doc, application.id)
                             ApplicationDocument.objects.create(
                                 application=application,
                                 vault_document=doc,
