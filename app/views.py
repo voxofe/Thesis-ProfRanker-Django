@@ -1,4 +1,5 @@
 from django.http import JsonResponse, FileResponse
+from django.db import models
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -16,6 +17,7 @@ from .models import (
     UserProfile,
     VaultDocument,
     ApplicationDocument,
+    PhdDegree,
 )
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
@@ -76,12 +78,17 @@ PROFILE_DOC_FIELD_MAP = {
 def profile_doc_info(doc):
     if not doc:
         return {"id": None, "name": None, "downloadPath": None, "isDefault": False}
+    is_used = ApplicationDocument.objects.filter(vault_document=doc).exists()
+    if not is_used:
+        is_used = PhdDegree.objects.filter(
+            models.Q(vault_document=doc) | models.Q(doatap_document=doc)
+        ).exists()
     return {
         "id": doc.id,
         "name": os.path.basename(doc.file.name) if doc.file else None,
         "downloadPath": f"/api/profile/documents/{doc.id}",
         "isDefault": doc.is_default,
-        "isUsed": ApplicationDocument.objects.filter(vault_document=doc).exists(),
+        "isUsed": is_used,
         "uploadedAt": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
     }
 
@@ -115,23 +122,15 @@ def cleanup_profile_doc_if_orphan(profile_doc):
         return
     if ApplicationDocument.objects.filter(vault_document=profile_doc).exists():
         return
-    user = profile_doc.user
-    doc_type = profile_doc.doc_type
-    if profile_doc.file:
-        profile_doc.file.delete(save=False)
-    profile_doc.delete()
-
-    if not VaultDocument.objects.filter(
-        user=user, doc_type=doc_type, is_default=True
+    if PhdDegree.objects.filter(
+        models.Q(vault_document=profile_doc) | models.Q(doatap_document=profile_doc)
     ).exists():
-        fallback = (
-            VaultDocument.objects.filter(user=user, doc_type=doc_type)
-            .order_by("-uploaded_at", "-id")
-            .first()
-        )
-        if fallback:
-            fallback.is_default = True
-            fallback.save(update_fields=["is_default"])
+        return
+    if not VaultDocument.objects.filter(
+        user=profile_doc.user, doc_type=profile_doc.doc_type, is_default=True
+    ).exists():
+        profile_doc.is_default = True
+        profile_doc.save(update_fields=["is_default"])
 
 
 def build_application_document_maps(application):
@@ -191,6 +190,7 @@ def build_application_form(app):
         "phdTitle": app.phd_title,
         "phdAcquisitionDate": app.phd_acquisition_date,
         "phdIsFromForeignInstitute": app.phd_is_from_foreign_institute,
+        "phdDegreeId": app.phd_degree_id,
         "scientificField": app.position.scientific_field.name if app.position else None,
         "workExperience": app.work_experience,
         "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
@@ -408,6 +408,25 @@ def build_profile_response(user, profile, applications=None):
     for doc in VaultDocument.objects.filter(user=user).order_by("-uploaded_at", "-id"):
         document_vault.setdefault(doc.doc_type, []).append(profile_doc_info(doc))
 
+    phd_degrees = []
+    for degree in (
+        PhdDegree.objects.filter(user=user)
+        .select_related("vault_document", "doatap_document")
+        .order_by("-acquired_at", "-id")
+    ):
+        phd_degrees.append(
+            {
+                "id": degree.id,
+                "title": degree.title,
+                "acquiredAt": degree.acquired_at,
+                "isForeignInstitute": bool(degree.is_foreign_institute),
+                "document": profile_doc_info(degree.vault_document),
+                "doatapDocument": profile_doc_info(degree.doatap_document)
+                if degree.is_foreign_institute
+                else None,
+            }
+        )
+
     return {
         "user": {
             "id": user.id,
@@ -451,6 +470,7 @@ def build_profile_response(user, profile, applications=None):
                 get_default_profile_doc(user, "responsible_declaration")
             ),
         },
+        "phdDegrees": phd_degrees,
         "documentVault": document_vault,
         "applications": applications_data,
     }
@@ -728,6 +748,15 @@ def profile_document_manage(request, doc_id):
             },
             status=400,
         )
+    if PhdDegree.objects.filter(
+        models.Q(vault_document=profile_doc) | models.Q(doatap_document=profile_doc)
+    ).exists():
+        return JsonResponse(
+            {
+                "error": "Το δικαιολογητικό χρησιμοποιείται σε διδακτορικό και δεν μπορεί να τροποποιηθεί.",
+            },
+            status=400,
+        )
 
     if request.method == "PUT":
         new_file = request.FILES.get("file")
@@ -855,6 +884,8 @@ def handle_form_submission(request):
             application.phd_acquisition_date = form_data.get("phdAcquisitionDate")
             application.phd_is_from_foreign_institute = form_data.get("phdIsFromForeignInstitute") == "true"
 
+            phd_degree_id = form_data.get("phdDegreeId")
+
             application.position = position
 
             application.work_experience = int(form_data.get("workExperience", 0))
@@ -897,10 +928,10 @@ def handle_form_submission(request):
                     vault_document=profile_doc,
                         doc_type=doc_type,
                     )
-                    return
+                    return profile_doc
 
                 if doc_id_value is None:
-                    return
+                    return None
 
                 if str(doc_id_value).strip() == "":
                     links = ApplicationDocument.objects.filter(
@@ -911,7 +942,7 @@ def handle_form_submission(request):
                         profile_doc = link.vault_document
                         link.delete()
                         cleanup_profile_doc_if_orphan(profile_doc)
-                    return
+                    return None
 
                 profile_doc = VaultDocument.objects.filter(
                     id=doc_id_value,
@@ -928,9 +959,52 @@ def handle_form_submission(request):
                         vault_document=profile_doc,
                         doc_type=doc_type,
                     )
+                return profile_doc
 
+            phd_vault_doc = None
+            doatap_vault_doc = None
             for field_key, doc_type in PROFILE_DOC_FIELD_MAP.items():
-                handle_profile_doc_upload(field_key, doc_type)
+                selected_doc = handle_profile_doc_upload(field_key, doc_type)
+                if doc_type == "phd":
+                    phd_vault_doc = selected_doc
+                elif doc_type == "doatap":
+                    doatap_vault_doc = selected_doc
+
+            degree = None
+            if phd_degree_id not in {None, "", "null", "None"}:
+                try:
+                    degree = PhdDegree.objects.filter(
+                        id=int(phd_degree_id), user=user
+                    ).first()
+                except (TypeError, ValueError):
+                    degree = None
+
+            if degree is None and application.phd_degree_id:
+                degree = PhdDegree.objects.filter(
+                    id=application.phd_degree_id, user=user
+                ).first()
+
+            if (
+                degree is None
+                and application.phd_title
+                and application.phd_acquisition_date
+                and phd_vault_doc
+            ):
+                degree = PhdDegree(user=user)
+
+            if degree:
+                degree.title = application.phd_title or ""
+                degree.acquired_at = application.phd_acquisition_date
+                degree.is_foreign_institute = application.phd_is_from_foreign_institute
+                if phd_vault_doc:
+                    degree.vault_document = phd_vault_doc
+                if degree.is_foreign_institute:
+                    if doatap_vault_doc:
+                        degree.doatap_document = doatap_vault_doc
+                else:
+                    degree.doatap_document = None
+                degree.save()
+                application.phd_degree = degree
 
             application.save()
 
@@ -952,6 +1026,18 @@ def handle_form_submission(request):
                         profile_doc = link.vault_document
                         link.delete()
                         cleanup_profile_doc_if_orphan(profile_doc)
+
+                    existing_ids = set(links.values_list("vault_document_id", flat=True))
+                    missing_ids = keep_ids - existing_ids
+                    if missing_ids:
+                        for doc in VaultDocument.objects.filter(
+                            id__in=missing_ids, user=user, doc_type=doc_type
+                        ):
+                            ApplicationDocument.objects.create(
+                                application=application,
+                                vault_document=doc,
+                                doc_type=doc_type,
+                            )
 
                 for doc_file in new_files:
                     if not doc_file:

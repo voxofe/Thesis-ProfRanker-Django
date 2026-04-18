@@ -84,6 +84,32 @@ class VaultDocument(models.Model):
         return f"{self.user.email} - {self.doc_type} ({self.id})"
 
 
+class PhdDegree(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="phd_degrees")
+    title = models.CharField(max_length=255)
+    acquired_at = models.DateField()
+    vault_document = models.ForeignKey(
+        VaultDocument,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="phd_degree_documents",
+    )
+    is_foreign_institute = models.BooleanField(default=False)
+    doatap_document = models.ForeignKey(
+        VaultDocument,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="phd_doatap_documents",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.title} ({self.acquired_at})"
+
+
 class ApplicationDocument(models.Model):
     application = models.ForeignKey(
         "Application",
@@ -156,6 +182,14 @@ class Application(models.Model):
     work_experience = models.IntegerField(blank=True, null=True)
     has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)
     is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)
+
+    phd_degree = models.ForeignKey(
+        PhdDegree,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="applications",
+    )
 
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
