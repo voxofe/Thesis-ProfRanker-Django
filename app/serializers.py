@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Application, Paper
+from .models import User, Application, Publication
 
 # Serializer for User
 class UserSerializer(serializers.ModelSerializer):
@@ -25,8 +25,18 @@ class ApplicationSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         return super().to_representation(instance)
 
-# Serializer for Paper
-class PaperSerializer(serializers.ModelSerializer):
+# Serializer for Publication
+class PublicationSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Paper
-        fields = ['type', 'paper_title', 'journal_conf_title', 'year', 'issn', 'country', 'quartile']
+        model = Publication
+        fields = [
+            'type',
+            'publication_title',
+            'journal_conf_title',
+            'year',
+            'issn',
+            'country',
+            'quartile',
+            'authors',
+            'publisher',
+        ]

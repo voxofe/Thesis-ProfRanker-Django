@@ -29,25 +29,25 @@ def calculate_thesis_relevance_points(application):
     return 0  # Placeholder
 
 # Criteria 4: Publications/conferences (0-20 points)
-def calculate_paper_points(papers):
-    # Calculate based on papers (already saved to DB)
+def calculate_publication_points(publications):
+    # Calculate based on publications (already saved to DB)
     total = 0
     count = 0
-    for paper in papers:
+    for publication in publications:
         count += 1
-        if paper.quartile == "Q1":
+        if publication.quartile == "Q1":
             total += 2
-        elif paper.quartile == "Q2":
+        elif publication.quartile == "Q2":
             total += 2 * 0.8
         else:
             total += 2 * 0.2 
         
-        print(f"Paper {count}: {paper.paper_title} - Points: {total}")
+        print(f"Publication {count}: {publication.publication_title} - Points: {total}")
     if total > 20:
         total = 20
 
     total = custom_round(total)
-    print(f"Total paper points: {total}")
+    print(f"Total publication points: {total}")
     return total
 
 # Criteria 5: Postdoctoral work experience (0-10 points)
@@ -55,11 +55,11 @@ def calculate_work_experience_points(application):
     return min(application.work_experience, 10)
 
     
-def calculate_points(application, papers):
+def calculate_points(application, publications):
     criteria1 = calculate_course_plan_relevance_points(application)
     criteria2 = calculate_course_material_structure_points(application)
     criteria3 = calculate_thesis_relevance_points(application)
-    criteria4 = calculate_paper_points(papers)
+    criteria4 = calculate_publication_points(publications)
     criteria5 = calculate_work_experience_points(application)
     total = criteria1 + criteria2 + criteria3 + criteria4 + criteria5
 
@@ -71,7 +71,7 @@ def calculate_points(application, papers):
         "course_plan_relevance_points": criteria1,
         "course_material_structure_points": criteria2,
         "thesis_relevance_points": criteria3,
-        "paper_points": criteria4,              
+        "publication_points": criteria4,              
         "work_experience_points": criteria5,
         "not_past_program_points": criteria6_bonus,
         "total_points": final_points,

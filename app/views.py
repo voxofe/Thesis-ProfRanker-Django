@@ -9,7 +9,7 @@ from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
 from .models import (
     Application,
-    Paper,
+    Publication,
     User,
     Position,
     ScientificField,
@@ -260,18 +260,20 @@ def build_application_form(app):
         ),
         "responsibleDeclarationDocument": single_doc_name("responsible_declaration"),
         "responsibleDeclarationDocumentId": single_doc_id("responsible_declaration"),
-        "papers": [
+        "publications": [
             {
-                "id": paper.id,
-                "type": paper.type,
-                "paperTitle": paper.paper_title,
-                "journalConfTitle": paper.journal_conf_title,
-                "year": paper.year,
-                "issn": paper.issn,
-                "country": paper.country,
-                "quartile": paper.quartile
+                "id": publication.id,
+                "type": publication.type,
+                "publicationTitle": publication.publication_title,
+                "journalConfTitle": publication.journal_conf_title,
+                "year": publication.year,
+                "issn": publication.issn,
+                "country": publication.country,
+                "quartile": publication.quartile,
+                "authors": publication.authors or "",
+                "publisher": publication.publisher,
             }
-            for paper in app.papers.all()
+            for publication in app.publications.all()
         ],
         "positionEndDate": app.position.end_date if app.position else None,
         "positionStartDate": app.position.start_date if app.position else None,
@@ -405,7 +407,7 @@ def get_user_by_token(request):
 
     applications = list(
         user.applications.select_related("position", "position__scientific_field")
-        .prefetch_related("papers")
+        .prefetch_related("publications")
         .order_by("-submitted_at", "-id")
     )
     if applications:
@@ -870,9 +872,9 @@ def profile_document_create(request):
     return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
 # Handle Form Submission
-def process_paper(paper):
-    if paper.get("type") == "journal":
-        return get_sjr_quartile(paper.get("year"), paper.get("issn"))
+def process_publication(publication):
+    if publication.get("type") == "journal":
+        return get_sjr_quartile(publication.get("year"), publication.get("issn"))
     return None
 
 @api_view(["POST"])
@@ -908,8 +910,16 @@ def handle_form_submission(request):
         start_time = time.time()
         try:
             form_data = request.data
-            papers_json = form_data.get("papers", "[]")
-            papers = json.loads(papers_json)
+            publications_json = form_data.get("publications", "[]")
+            publications = json.loads(publications_json)
+
+            def normalize_authors(value):
+                if isinstance(value, list):
+                    return ", ".join([str(author).strip() for author in value if str(author).strip()])
+                if value is None:
+                    return ""
+                return str(value)
+
 
             # --- Require position for unique application ---
             position_id = form_data.get("positionId")
@@ -1123,31 +1133,31 @@ def handle_form_submission(request):
                 keep_ids_key="employmentCertificateDocumentIds",
             )
 
-            # --- Papers resubmission logic ---
-            # Build a dict of existing papers for quick lookup
-            existing_papers = {paper.id: paper for paper in application.papers.all()}
+            # --- Publications resubmission logic ---
+            # Build a dict of existing publications for quick lookup
+            existing_publications = {publication.id: publication for publication in application.publications.all()}
             submitted_ids = set()
 
             # SJR results and multithreading
             sjr_results = []
             with ThreadPoolExecutor(max_workers=4) as executor: 
-                future_to_paper = {executor.submit(process_paper, paper): paper for paper in papers}
+                future_to_publication = {executor.submit(process_publication, publication): publication for publication in publications}
 
-                for future in future_to_paper:
-                    paper = future_to_paper[future]
+                for future in future_to_publication:
+                    publication = future_to_publication[future]
                     sjr_data = future.result()
 
                     notFound = ""
                     sjr_results.append({
-                        "journalTitle": sjr_data["title"] if sjr_data else paper.get("journalConfTitle", notFound),
-                        # "year": sjr_data["year"] if sjr_data else paper.get("year", notFound),
+                        "journalTitle": sjr_data["title"] if sjr_data else publication.get("journalConfTitle", notFound),
+                        # "year": sjr_data["year"] if sjr_data else publication.get("year", notFound),
                         "issn": (
-                            paper.get("issn") if sjr_data
+                            publication.get("issn") if sjr_data
                             else (
-                                notFound if not paper.get("issn") or paper.get("issn") == notFound
+                                notFound if not publication.get("issn") or publication.get("issn") == notFound
                                 else (
-                                    paper.get("issn") if "Wrong" in paper.get("issn")
-                                    else paper.get("issn") + " (Wrong)"
+                                    publication.get("issn") if "Wrong" in publication.get("issn")
+                                    else publication.get("issn") + " (Wrong)"
                                 )
                             )
                         ),
@@ -1157,45 +1167,47 @@ def handle_form_submission(request):
 
                     sjr_result = sjr_results[-1]
 
-                    paper_id = paper.get("id")
-                    if paper_id and paper_id in existing_papers:
-                        # Update existing paper
-                        db_paper = existing_papers[paper_id]
-                        db_paper.type = paper.get("type")
-                        db_paper.paper_title = paper.get("paperTitle")
-                        db_paper.journal_conf_title = sjr_result["journalTitle"]
-                        db_paper.year = paper.get("year")
-                        db_paper.issn = sjr_result["issn"]
-                        db_paper.country = sjr_result["country"]
-                        db_paper.quartile = sjr_result["sjr_quartile"]
-
-                        db_paper.save()
-                        submitted_ids.add(paper_id)
+                    publication_id = publication.get("id")
+                    if publication_id and publication_id in existing_publications:
+                        # Update existing publication
+                        db_publication = existing_publications[publication_id]
+                        db_publication.type = publication.get("type")
+                        db_publication.publication_title = publication.get("publicationTitle")
+                        db_publication.journal_conf_title = sjr_result["journalTitle"]
+                        db_publication.year = publication.get("year")
+                        db_publication.issn = sjr_result["issn"]
+                        db_publication.country = sjr_result["country"]
+                        db_publication.quartile = sjr_result["sjr_quartile"]
+                        db_publication.authors = normalize_authors(publication.get("authors"))
+                        db_publication.publisher = publication.get("publisher")
+                        db_publication.save()
+                        submitted_ids.add(publication_id)
                     else:
-                        # Create new paper
-                        new_paper = Paper.objects.create(
+                        # Create new publication
+                        new_publication = Publication.objects.create(
                             application=application,
-                            type=paper.get("type"),
-                            paper_title=paper.get("paperTitle"),
+                            type=publication.get("type"),
+                            publication_title=publication.get("publicationTitle"),
                             journal_conf_title=sjr_result["journalTitle"],
-                            year=paper.get("year"),
+                            year=publication.get("year"),
                             issn=sjr_result["issn"],
                             country=sjr_result["country"],
                             quartile=sjr_result["sjr_quartile"],
-
+                            authors=normalize_authors(publication.get("authors")),
+                            publisher=publication.get("publisher"),
                         )
-                        submitted_ids.add(new_paper.id)
+                        submitted_ids.add(new_publication.id)
 
-            # Delete papers not in submitted
-            for paper_id, db_paper in existing_papers.items():
-                if paper_id not in submitted_ids:
-                    db_paper.delete()
+            # Delete publications not in submitted
+            for publication_id, db_publication in existing_publications.items():
+                if publication_id not in submitted_ids:
+                    db_publication.delete()
 
-            # Retrieve all Paper instances for the application
-            papers_qs = Paper.objects.filter(application=application)
+            # Retrieve all Publication instances for the application
+            publications_qs = Publication.objects.filter(application=application)
 
-            # Now calculate points AFTER papers are processed
-            calculated_points = calculate_points(application, papers_qs)
+            # Now calculate points AFTER publications are processed
+            calculated_points = calculate_points(application, publications_qs)
             
             # Update the Application instance with the calculated points
             Application.objects.filter(id=application.id).update(**calculated_points)
@@ -1299,22 +1311,24 @@ def get_applicant_score(request, application_id):
         "coursePlanRelevancePoints": application.course_plan_relevance_points,
         "courseMaterialStructurePoints": application.course_material_structure_points,
         "thesisRelevancePoints": application.thesis_relevance_points,
-        "paperPoints": application.paper_points,
+        "publicationPoints": application.publication_points,
         "workExperiencePoints": application.work_experience_points,
         "notPastProgramPoints": application.not_past_program_points,
         "totalPoints": application.total_points,
-        "papers": [
+        "publications": [
             {
-                "id": paper.id,
-                "type": paper.type,
-                "paperTitle": paper.paper_title,
-                "journalConfTitle": paper.journal_conf_title,
-                "year": paper.year,
-                "issn": paper.issn,
-                "country": paper.country,
-                "quartile": paper.quartile,
+                "id": publication.id,
+                "type": publication.type,
+                "publicationTitle": publication.publication_title,
+                "journalConfTitle": publication.journal_conf_title,
+                "year": publication.year,
+                "issn": publication.issn,
+                "country": publication.country,
+                "quartile": publication.quartile,
+                "authors": publication.authors or "",
+                "publisher": publication.publisher,
             }
-            for paper in application.papers.all()
+            for publication in application.publications.all()
         ],
         "submitDate": timezone.localtime(application.submitted_at, ZoneInfo("Europe/Athens")).strftime("%d-%m-%Y %H:%M") if application.submitted_at else "",
         "positionStartDate": application.position.start_date.strftime("%d-%m-%Y") if application.position and application.position.start_date else "",

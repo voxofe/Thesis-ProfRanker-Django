@@ -195,7 +195,7 @@ class Application(models.Model):
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)
-    paper_points = models.IntegerField(default=0, blank=True, null=True)
+    publication_points = models.IntegerField(default=0, blank=True, null=True)
     work_experience_points = models.IntegerField(default=0, blank=True, null=True)
     not_past_program_points = models.IntegerField(default=0, blank=True, null=True)
     total_points = models.IntegerField(default=0, blank=True, null=True)
@@ -216,16 +216,18 @@ class Application(models.Model):
             return f"Application #{self.id}"
         return f"{self.user.first_name} {self.user.last_name} - {self.user.email}"
 
-class Paper(models.Model):
-    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name="papers")  # One-to-Many Relationship
+class Publication(models.Model):
+    application = models.ForeignKey(Application, on_delete=models.CASCADE, related_name="publications")  # One-to-Many Relationship
     type = models.CharField(max_length=100, blank=True, null=True)
-    paper_title = models.CharField(max_length=255, blank=True, null=True)
+    publication_title = models.CharField(max_length=255, blank=True, null=True)
     journal_conf_title = models.CharField(max_length=255, blank=True, null=True)
     year = models.CharField(max_length=4, blank=True, null=True)
     issn = models.CharField(max_length=50, blank=True, null=True)
     country = models.CharField(max_length=100, blank=True, null=True)
     quartile = models.CharField(max_length=10, blank=True, null=True)
+    authors = models.JSONField(default=list, blank=True, null=True)
+    publisher = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):
-        return f"{self.paper_title} ({self.year})"
+        return f"{self.publication_title} ({self.year})"
 
