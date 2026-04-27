@@ -33,6 +33,7 @@ urlpatterns = [
     path('api/profile/vault', views.profile_document_create, name='profile_document_create'),
     path('api/submit', views.handle_form_submission, name='handle_form_submission'),
     path('api/applications/<int:application_id>', views.get_application_detail, name='get_application_detail'),
+    path('api/applications/<int:application_id>/delete', views.delete_application, name='delete_application'),
     path('api/applicant/<int:application_id>', views.get_applicant_score, name='get_applicant_score'),
     path('api/applicant/<int:application_id>/documents/<str:doc_key>', views.download_applicant_document, name='download_applicant_document'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),

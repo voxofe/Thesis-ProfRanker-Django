@@ -15,12 +15,14 @@ from .models import (
     ScientificField,
     Course,
     UserProfile,
+    ProfilePublication,
     VaultDocument,
     ApplicationDocument,
     PhdDegree,
 )
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
+from django.conf import settings
 from django.core.files.base import File
 import time
 import json
@@ -33,6 +35,19 @@ import mimetypes
 
 MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
+
+
+def is_position_active(position, now=None):
+    if not position or not position.start_date or not position.end_date:
+        return False
+    tz = ZoneInfo("Europe/Athens")
+    if now is None:
+        now = timezone.now().astimezone(tz)
+    start_time = position.start_time or dt_time(0, 0)
+    end_time = position.end_time or dt_time(23, 59)
+    start_dt = datetime.combine(position.start_date, start_time, tzinfo=tz)
+    end_dt = datetime.combine(position.end_date, end_time, tzinfo=tz)
+    return start_dt <= now <= end_dt
 
 
 def validate_vault_file(uploaded_file):
@@ -187,7 +202,7 @@ def build_application_document_maps(application):
         doc_info = {
             "id": doc.id,
             "name": os.path.basename(doc.file.name) if doc.file else None,
-            "downloadPath": f"/api/applications/{application.id}/documents/{doc.id}",
+            "downloadPath": f"/api/applicant/{application.id}/documents/{doc.id}",
         }
         if link.doc_type in MULTI_DOC_TYPES:
             multi_docs[link.doc_type].append(doc_info)
@@ -431,6 +446,26 @@ def build_profile_response(user, profile, applications=None):
             if application.submitted_at
             else ""
         )
+        position_end_date = (
+            application.position.end_date.strftime("%d-%m-%Y")
+            if application.position and application.position.end_date
+            else ""
+        )
+        position_start_date = (
+            application.position.start_date.strftime("%d-%m-%Y")
+            if application.position and application.position.start_date
+            else ""
+        )
+        position_start_time = (
+            application.position.start_time.strftime("%H:%M")
+            if application.position and application.position.start_time
+            else ""
+        )
+        position_end_time = (
+            application.position.end_time.strftime("%H:%M")
+            if application.position and application.position.end_time
+            else ""
+        )
         applications_data.append(
             {
                 "id": application.id,
@@ -439,9 +474,20 @@ def build_profile_response(user, profile, applications=None):
                 "department": sf.department if sf else "",
                 "school": get_school_of_department(sf.department) if sf else "",
                 "submitDate": submit_date,
+                "positionStartDate": position_start_date,
+                "positionStartTime": position_start_time,
+                "positionEndDate": position_end_date,
+                "positionEndTime": position_end_time,
+                "isActive": is_position_active(application.position),
                 "totalPoints": application.total_points,
             }
         )
+
+    profile_publications = [
+        serialize_profile_publication(publication)
+        for publication in ProfilePublication.objects.filter(user=user)
+        .order_by("-updated_at", "-id")
+    ]
 
     document_vault = {}
     for doc in VaultDocument.objects.filter(user=user).order_by("-uploaded_at", "-id"):
@@ -512,6 +558,7 @@ def build_profile_response(user, profile, applications=None):
         "phdDegrees": phd_degrees,
         "documentVault": document_vault,
         "applications": applications_data,
+        "profilePublications": profile_publications,
     }
 
 
@@ -534,6 +581,7 @@ def profile_detail(request):
     applications = list(
         Application.objects.filter(user=user)
         .select_related("position", "position__scientific_field")
+        .prefetch_related("publications")
         .order_by("-submitted_at", "-id")
     )
 
@@ -579,6 +627,15 @@ def profile_detail(request):
         work_experience = application_defaults.get(
             "workExperience", data.get("workExperience")
         )
+
+        profile_publications = data.get("profilePublications")
+        has_profile_publications = "profilePublications" in data
+        if isinstance(profile_publications, str):
+            try:
+                profile_publications = json.loads(profile_publications)
+            except json.JSONDecodeError:
+                profile_publications = []
+
 
         def coerce_bool(value):
             if isinstance(value, bool):
@@ -661,6 +718,47 @@ def profile_detail(request):
                     profile.work_experience = int(work_experience)
                 except (TypeError, ValueError):
                     profile.work_experience = None
+
+        if has_profile_publications:
+            submitted_ids = set()
+            existing_publications = {
+                publication.id: publication
+                for publication in ProfilePublication.objects.filter(user=user)
+            }
+            for item in profile_publications or []:
+                payload = build_profile_publication_payload(item or {})
+                publication_id = item.get("id") if isinstance(item, dict) else None
+                if publication_id and publication_id in existing_publications:
+                    db_publication = existing_publications[publication_id]
+                    db_publication.type = payload["type"] or None
+                    db_publication.publication_title = payload["publication_title"] or None
+                    db_publication.journal_conf_title = payload["journal_conf_title"] or None
+                    db_publication.year = payload["year"] or None
+                    db_publication.issn = payload["issn"] or None
+                    db_publication.country = payload["country"] or None
+                    db_publication.quartile = payload["quartile"] or None
+                    db_publication.authors = payload["authors"] or ""
+                    db_publication.publisher = payload["publisher"] or None
+                    db_publication.save()
+                    submitted_ids.add(db_publication.id)
+                else:
+                    new_publication = ProfilePublication.objects.create(
+                        user=user,
+                        type=payload["type"] or None,
+                        publication_title=payload["publication_title"] or None,
+                        journal_conf_title=payload["journal_conf_title"] or None,
+                        year=payload["year"] or None,
+                        issn=payload["issn"] or None,
+                        country=payload["country"] or None,
+                        quartile=payload["quartile"] or None,
+                        authors=payload["authors"] or "",
+                        publisher=payload["publisher"] or None,
+                    )
+                    submitted_ids.add(new_publication.id)
+
+            for publication_id, db_publication in existing_publications.items():
+                if publication_id not in submitted_ids:
+                    db_publication.delete()
 
         profile.save()
 
@@ -877,6 +975,61 @@ def process_publication(publication):
         return get_sjr_quartile(publication.get("year"), publication.get("issn"))
     return None
 
+
+def normalize_publication_value(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def normalize_authors_value(value):
+    if isinstance(value, list):
+        return ", ".join([normalize_publication_value(author) for author in value if normalize_publication_value(author)])
+    return normalize_publication_value(value)
+
+
+def build_profile_publication_payload(data):
+    return {
+        "type": normalize_publication_value(data.get("type")),
+        "publication_title": normalize_publication_value(data.get("publicationTitle")),
+        "journal_conf_title": normalize_publication_value(data.get("journalConfTitle")),
+        "year": normalize_publication_value(data.get("year")),
+        "issn": normalize_publication_value(data.get("issn")),
+        "country": normalize_publication_value(data.get("country")),
+        "quartile": normalize_publication_value(data.get("quartile")),
+        "authors": normalize_authors_value(data.get("authors")),
+        "publisher": normalize_publication_value(data.get("publisher")),
+    }
+
+
+def profile_publication_key(payload):
+    return (
+        payload.get("type", ""),
+        payload.get("publication_title", ""),
+        payload.get("journal_conf_title", ""),
+        payload.get("year", ""),
+        payload.get("issn", ""),
+        payload.get("country", ""),
+        payload.get("quartile", ""),
+        payload.get("authors", ""),
+        payload.get("publisher", ""),
+    )
+
+
+def serialize_profile_publication(publication):
+    return {
+        "id": publication.id,
+        "type": publication.type,
+        "publicationTitle": publication.publication_title,
+        "journalConfTitle": publication.journal_conf_title,
+        "year": publication.year,
+        "issn": publication.issn,
+        "country": publication.country,
+        "quartile": publication.quartile,
+        "authors": publication.authors or "",
+        "publisher": publication.publisher,
+    }
+
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser])  # Handle both form data and file uploads
 @csrf_exempt
@@ -930,6 +1083,9 @@ def handle_form_submission(request):
                 position = Position.objects.get(id=position_id)
             except Position.DoesNotExist:
                 return JsonResponse({"error": "Position not found."}, status=404)
+
+            if not is_position_active(position):
+                return JsonResponse({"error": "Η θέση δεν είναι ενεργή για υποβολή/επανυποβολή."}, status=400)
 
             # --- Get or create Application ---
             application, created = Application.objects.get_or_create(
@@ -1203,6 +1359,46 @@ def handle_form_submission(request):
                 if publication_id not in submitted_ids:
                     db_publication.delete()
 
+            if created:
+                existing_profile_publications = list(
+                    ProfilePublication.objects.filter(user=user)
+                )
+                existing_keys = {
+                    profile_publication_key(
+                        {
+                            "type": normalize_publication_value(pub.type),
+                            "publication_title": normalize_publication_value(pub.publication_title),
+                            "journal_conf_title": normalize_publication_value(pub.journal_conf_title),
+                            "year": normalize_publication_value(pub.year),
+                            "issn": normalize_publication_value(pub.issn),
+                            "country": normalize_publication_value(pub.country),
+                            "quartile": normalize_publication_value(pub.quartile),
+                            "authors": normalize_authors_value(pub.authors),
+                            "publisher": normalize_publication_value(pub.publisher),
+                        }
+                    )
+                    for pub in existing_profile_publications
+                }
+                added_keys = set()
+                for publication in publications:
+                    payload = build_profile_publication_payload(publication or {})
+                    key = profile_publication_key(payload)
+                    if key in existing_keys or key in added_keys:
+                        continue
+                    ProfilePublication.objects.create(
+                        user=user,
+                        type=payload["type"] or None,
+                        publication_title=payload["publication_title"] or None,
+                        journal_conf_title=payload["journal_conf_title"] or None,
+                        year=payload["year"] or None,
+                        issn=payload["issn"] or None,
+                        country=payload["country"] or None,
+                        quartile=payload["quartile"] or None,
+                        authors=payload["authors"] or "",
+                        publisher=payload["publisher"] or None,
+                    )
+                    added_keys.add(key)
+
             # Retrieve all Publication instances for the application
             publications_qs = Publication.objects.filter(application=application)
 
@@ -1278,7 +1474,7 @@ def get_applicant_score(request, application_id):
                 return {
                     "url": request.build_absolute_uri(vault_doc.file.url),
                     "name": os.path.basename(vault_doc.file.name),
-                    "downloadPath": f"/api/applications/{application.id}/documents/{doc_id}",
+                    "downloadPath": f"/api/applicant/{application.id}/documents/{doc_id}",
                 }
         return {"url": None, "name": None, "downloadPath": None}
 
@@ -1381,6 +1577,68 @@ def get_application_detail(request, application_id):
     return JsonResponse(data, safe=False)
 
 
+@api_view(["DELETE"])
+def delete_application(request, application_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    requesting_user = User.objects.filter(id=user_id).first()
+    if not requesting_user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    application = get_object_or_404(
+        Application.objects.select_related("position"),
+        id=application_id,
+    )
+    application_user_id = application.user_id
+
+    if requesting_user.role != "admin" and requesting_user.id != application.user_id:
+        return JsonResponse({"error": "Forbidden."}, status=403)
+
+    if not is_position_active(application.position):
+        return JsonResponse({"error": "Η θέση δεν είναι ενεργή για διαγραφή."}, status=400)
+
+    links = list(
+        ApplicationDocument.objects.filter(application=application).select_related("vault_document")
+    )
+    degree = application.phd_degree
+    has_other_degree_refs = False
+    if degree:
+        has_other_degree_refs = Application.objects.filter(phd_degree=degree).exclude(id=application.id).exists()
+
+    application.delete()
+
+    for link in links:
+        cleanup_profile_doc_if_orphan(link.vault_document)
+
+    if degree and not has_other_degree_refs:
+        degree_docs = [degree.vault_document, degree.doatap_document]
+        degree.vault_document = None
+        degree.doatap_document = None
+        degree.save(update_fields=["vault_document", "doatap_document"])
+        for doc in degree_docs:
+            cleanup_profile_doc_if_orphan(doc)
+
+    if application_user_id:
+        app_dir = os.path.join(
+            settings.MEDIA_ROOT,
+            f"documents/user_{application_user_id}/application_{application_id}",
+        )
+        try:
+            if os.path.isdir(app_dir) and not os.listdir(app_dir):
+                os.rmdir(app_dir)
+        except OSError:
+            pass
+
+    return JsonResponse({"success": True})
+
+
 @api_view(["GET"])
 def download_applicant_document(request, application_id, doc_key):
     auth_header = request.headers.get("Authorization")
@@ -1430,8 +1688,14 @@ def download_applicant_document(request, application_id, doc_key):
         return JsonResponse({"error": "Document not found."}, status=404)
 
     filename = os.path.basename(file_field.name)
-    response = FileResponse(file_field.open("rb"), as_attachment=True, filename=filename)
-    response["Content-Type"] = "application/octet-stream"
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    inline = request.GET.get("inline") in {"1", "true", "True"}
+    response = FileResponse(
+        file_field.open("rb"),
+        as_attachment=not inline,
+        filename=filename,
+        content_type=content_type,
+    )
     return response
 
 # Get All Scores

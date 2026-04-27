@@ -59,6 +59,24 @@ class UserProfile(models.Model):
         return f"Profile: {self.user.first_name} {self.user.last_name}"
 
 
+class ProfilePublication(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="profile_publications")
+    type = models.CharField(max_length=100, blank=True, null=True)
+    publication_title = models.CharField(max_length=255, blank=True, null=True)
+    journal_conf_title = models.CharField(max_length=255, blank=True, null=True)
+    year = models.CharField(max_length=4, blank=True, null=True)
+    issn = models.CharField(max_length=50, blank=True, null=True)
+    country = models.CharField(max_length=100, blank=True, null=True)
+    quartile = models.CharField(max_length=10, blank=True, null=True)
+    authors = models.JSONField(default=list, blank=True, null=True)
+    publisher = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.publication_title} ({self.year})"
+
+
 class VaultDocument(models.Model):
     DOCUMENT_TYPES = [
         ("cv", "CV"),
