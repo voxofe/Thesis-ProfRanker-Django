@@ -233,6 +233,8 @@ def build_application_form(app):
     return {
         "id": app.id,
         "positionId": app.position.id if app.position else None,
+        "positionEndDate": app.position.end_date.strftime("%d-%m-%Y") if app.position and app.position.end_date else "",
+        "positionEndTime": app.position.end_time.strftime("%H:%M") if app.position and app.position.end_time else "",
         "phoneNumber": app.phone_number,
         "landlineNumber": app.landline_number,
         "streetAddress": app.street_address,
@@ -1741,6 +1743,7 @@ def get_all_scores(request):
             result.append({
                 "id": user.id,
                 "applicationId": app.id,
+                "positionId": app.position.id if app.position else None,
                 "firstName": user.first_name,
                 "lastName": user.last_name,
                 "school": get_school_of_department(app.position.scientific_field.department),
