@@ -1115,6 +1115,11 @@ def handle_form_submission(request):
             application.is_eu_citizen_non_greek = form_data.get("isEuCitizenNonGreek") == "true"
 
             profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.mobile_number = application.phone_number
+            profile.landline_number = application.landline_number
+            profile.street_address = application.street_address
+            profile.city = application.city
+            profile.postal_code = application.postal_code
             profile.is_public_employee = application.is_public_employee
             profile.is_eu_citizen_non_greek = application.is_eu_citizen_non_greek
             profile.has_not_participated_in_past_program = application.has_not_participated_in_past_program
