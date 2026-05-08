@@ -151,3 +151,22 @@ if CLIENT_URL and CLIENT_URL not in CLIENT_ORIGINS:
 CORS_ALLOWED_ORIGINS = CLIENT_ORIGINS
 CSRF_TRUSTED_ORIGINS = CLIENT_ORIGINS
 
+RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.getenv(
+    "RESEND_FROM_EMAIL",
+    "ProfRanker <no-reply@mail.profrankerapp.com>",
+).strip()
+RESEND_EMAIL_TEMPLATE_PATH = os.getenv(
+    "RESEND_EMAIL_TEMPLATE_PATH",
+    os.path.join(BASE_DIR, "app", "templates", "email", "email_style.html"),
+)
+RESEND_EMAIL_LOGO_URL = os.getenv(
+    "RESEND_EMAIL_LOGO_URL",
+    "https://profrankerapp.com/ProfRanker-logo.png",
+).strip()
+RESEND_EMAIL_FOOTER = os.getenv(
+    "RESEND_EMAIL_FOOTER",
+    "Παρακαλώ μην απαντήσετε σε αυτό το email, καθώς αποστέλλεται αυτόματα και δεν παρακολουθείται.",
+).strip()
+

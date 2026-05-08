@@ -7,6 +7,8 @@ from .serializers import ApplicationSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
+from .utils.email_utils import build_email_html, send_resend_email, send_template_email, send_template_email_async
+from .utils.application_change_utils import build_application_snapshot, diff_application_snapshots
 from .models import (
     Application,
     Publication,
@@ -296,7 +298,6 @@ def build_application_form(app):
         "positionStartDate": app.position.start_date if app.position else None,
     }
 
-# Register
 @csrf_exempt
 @api_view(["POST"])
 def user_register(request):
@@ -322,6 +323,11 @@ def user_register(request):
     )
     user.set_password(password)
     user.save()
+
+    try:
+        send_template_email_async("guest_registration", user.email)
+    except Exception as exc:
+        print(f"Registration email failed: {exc}")
 
     return JsonResponse({"message": "Registration successful."}, status=200)
 
@@ -363,6 +369,11 @@ def user_register_admin(request):
     new_admin.set_password(password)
     new_admin.save()
 
+    try:
+        send_template_email_async("admin_registration", new_admin.email)
+    except Exception as exc:
+        print(f"Admin registration email failed: {exc}")
+
     return JsonResponse({"message": "Admin registration successful."}, status=200)
 
 # Login
@@ -381,6 +392,65 @@ def user_login(request):
             return JsonResponse({"error": "Invalid credentials"}, status=401)
     except User.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
+
+
+@csrf_exempt
+@api_view(["POST"])
+def email_test(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    data = request.data
+    to_email = data.get("to") or user.email
+    template_name = (data.get("template") or "").strip()
+    subject = data.get("subject") or "ProfRanker test email"
+    body_html = data.get("html") or "<p>This is a test email from ProfRanker.</p>"
+    text = data.get("text") or "This is a test email from ProfRanker."
+
+    if template_name:
+        template_context = data.get("context")
+        if isinstance(template_context, str):
+            try:
+                template_context = json.loads(template_context)
+            except json.JSONDecodeError:
+                template_context = {}
+        if not isinstance(template_context, dict):
+            template_context = {}
+        try:
+            result = send_template_email(template_name, to_email, template_context)
+        except Exception as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+
+        return JsonResponse({"message": "Email sent.", "result": result}, status=200)
+
+    headline = data.get("headline") or subject
+
+    try:
+        html = build_email_html(subject=subject, headline=headline, body_html=body_html)
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    try:
+        result = send_resend_email(
+            to_email=to_email,
+            subject=subject,
+            html=html,
+            text=text,
+        )
+    except Exception as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    return JsonResponse({"message": "Email sent.", "result": result}, status=200)
 
 # Get User by Token
 @api_view(["GET"])
@@ -1094,6 +1164,9 @@ def handle_form_submission(request):
                 user=user,
                 position=position,
             )
+            previous_snapshot = None
+            if not created:
+                previous_snapshot = build_application_snapshot(application)
 
             # --- Update simple fields ---
             application.phone_number = form_data.get("phoneNumber")
@@ -1414,6 +1487,41 @@ def handle_form_submission(request):
             
             # Update the Application instance with the calculated points
             Application.objects.filter(id=application.id).update(**calculated_points)
+
+            if created:
+                submission_context = {
+                    "scientific_field": position.scientific_field.name,
+                    "end_date": position.end_date.strftime("%d-%m-%Y"),
+                    "application_id": application.id,
+                }
+                try:
+                    send_template_email_async(
+                        "application_submitted",
+                        user.email,
+                        submission_context,
+                    )
+                except Exception as exc:
+                    print(f"Submission email failed: {exc}")
+            else:
+                current_snapshot = build_application_snapshot(application)
+                changed, _, _ = diff_application_snapshots(
+                    previous_snapshot,
+                    current_snapshot,
+                )
+                if changed:
+                    resubmission_context = {
+                        "scientific_field": position.scientific_field.name,
+                        "end_date": position.end_date.strftime("%d-%m-%Y"),
+                        "application_id": application.id,
+                    }
+                    try:
+                        send_template_email_async(
+                            "application_resubmitted",
+                            user.email,
+                            resubmission_context,
+                        )
+                    except Exception as exc:
+                        print(f"Resubmission email failed: {exc}")
 
             # Serialize the application instance
             application_serializer = ApplicationSerializer(application)
