@@ -64,6 +64,56 @@ def send_resend_email(to_email, subject, html, text=None, from_email=None):
     return data
 
 
+def _get_resend_batch_url():
+    base_url = getattr(settings, "RESEND_API_URL", "https://api.resend.com/emails")
+    if base_url.endswith("/emails"):
+        return f"{base_url}/batch"
+    return f"{base_url.rstrip('/')}/emails/batch"
+
+
+def send_resend_batch_emails(email_payloads, from_email=None):
+    api_key = getattr(settings, "RESEND_API_KEY", "") or ""
+    if not api_key:
+        raise ValueError("RESEND_API_KEY is not configured.")
+
+    sender = from_email or getattr(settings, "RESEND_FROM_EMAIL", "") or ""
+    if not sender:
+        raise ValueError("RESEND_FROM_EMAIL is not configured.")
+
+    payload = []
+    for item in email_payloads:
+        email_item = {
+            "from": sender,
+            "to": item["to"],
+            "subject": item["subject"],
+            "html": item["html"],
+        }
+        if item.get("text"):
+            email_item["text"] = item["text"]
+        payload.append(email_item)
+
+    response = requests.post(
+        _get_resend_batch_url(),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=15,
+    )
+
+    try:
+        data = response.json()
+    except ValueError:
+        data = {"error": response.text}
+
+    if not response.ok:
+        message = data.get("error") if isinstance(data, dict) else None
+        raise RuntimeError(message or "Resend batch request failed.")
+
+    return data
+
+
 def send_resend_email_async(to_email, subject, html, text=None, from_email=None):
     def _worker():
         try:
@@ -92,3 +142,15 @@ def send_template_email(template_key, to_email, context=None):
     subject, headline, body_html, text = build_email_payload(template_key, context)
     html = build_email_html(subject=subject, headline=headline, body_html=body_html)
     return send_resend_email(to_email=to_email, subject=subject, html=html, text=text)
+
+
+def send_template_batch_email(template_key, to_emails, context=None):
+    subject, headline, body_html, text = build_email_payload(template_key, context)
+    html = build_email_html(subject=subject, headline=headline, body_html=body_html)
+    payloads = [
+        {"to": [email], "subject": subject, "html": html, "text": text}
+        for email in to_emails
+    ]
+    if not payloads:
+        return {"message": "No recipients"}
+    return send_resend_batch_emails(payloads)

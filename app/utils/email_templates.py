@@ -145,11 +145,44 @@ def build_application_resubmission_email(context):
     return subject, headline, body_html, text
 
 
+def build_position_closed_email(context):
+    scientific_field = escape(context.get("scientific_field", ""))
+    cta_url = "https://profrankerapp.com/ranking"
+
+    subject = f"Λήξη περιόδου αιτήσεων για ({scientific_field})"
+    headline = "Οι αιτήσεις μόλις έκλεισαν!"
+    body_html = (
+        "<p>Η διαδικασία υποβολής αιτήσεων και τελικής αξιολόγησής τους για το "
+        f"επιστημονικό πεδίο <strong>{scientific_field}</strong> είναι πλέον ολοκληρωμένη. "
+        "Συνδεθείτε για να δείτε τη θέση σας στη λίστα κατάταξης των υποψηφίων.</p>"
+        "<table role=\"presentation\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" "
+        "style=\"margin:18px auto 8px;\">"
+        "<tr>"
+        "<td align=\"center\">"
+        f"<a href=\"{cta_url}\" "
+        "style=\"display:inline-block;background:#633439;color:#ffffff;text-decoration:none;"
+        "padding:10px 18px;border-radius:8px;font-weight:600;\">"
+        "Προβολή κατάταξης"
+        "</a>"
+        "</td>"
+        "</tr>"
+        "</table>"
+    )
+    text = (
+        "Η διαδικασία υποβολής αιτήσεων και τελικής αξιολόγησής τους για το "
+        f"επιστημονικό πεδίο {scientific_field} είναι πλέον ολοκληρωμένη. "
+        "Συνδεθείτε για να δείτε τη θέση σας στη λίστα κατάταξης των υποψηφίων. "
+        f"Προβολή κατάταξης: {cta_url}"
+    )
+    return subject, headline, body_html, text
+
+
 EMAIL_TEMPLATE_BUILDERS = {
     "guest_registration": build_guest_registration_email,
     "admin_registration": build_admin_registration_email,
     "application_submitted": build_application_submission_email,
     "application_resubmitted": build_application_resubmission_email,
+    "position_closed": build_position_closed_email,
 }
 
 

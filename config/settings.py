@@ -170,3 +170,5 @@ RESEND_EMAIL_FOOTER = os.getenv(
     "Παρακαλώ μην απαντήσετε σε αυτό το email, καθώς αποστέλλεται αυτόματα και δεν παρακολουθείται.",
 ).strip()
 
+CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
+

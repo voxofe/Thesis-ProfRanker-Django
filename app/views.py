@@ -7,7 +7,13 @@ from .serializers import ApplicationSerializer
 from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
-from .utils.email_utils import build_email_html, send_resend_email, send_template_email, send_template_email_async
+from .utils.email_utils import (
+    build_email_html,
+    send_resend_email,
+    send_template_email,
+    send_template_email_async,
+    send_template_batch_email,
+)
 from .utils.application_change_utils import build_application_snapshot, diff_application_snapshots
 from .models import (
     Application,
@@ -451,6 +457,68 @@ def email_test(request):
         return JsonResponse({"error": str(exc)}, status=400)
 
     return JsonResponse({"message": "Email sent.", "result": result}, status=200)
+
+
+@csrf_exempt
+@api_view(["POST"])
+def cron_send_position_closed_emails(request):
+    secret = request.headers.get("X-CRON-SECRET", "")
+    if not secret or secret != settings.CRON_SECRET:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    tz = ZoneInfo("Europe/Athens")
+    now = timezone.now().astimezone(tz)
+
+    positions = (
+        Position.objects.filter(end_date__lte=now.date(), closed_notified_at__isnull=True)
+        .select_related("scientific_field")
+        .order_by("end_date", "end_time", "id")
+    )
+
+    sent_positions = 0
+    sent_emails = 0
+    skipped_positions = 0
+
+    def chunked(items, size):
+        for i in range(0, len(items), size):
+            yield items[i : i + size]
+
+    for position in positions:
+        end_time = position.end_time or dt_time(23, 59)
+        end_dt = datetime.combine(position.end_date, end_time, tzinfo=tz)
+        if end_dt > now:
+            skipped_positions += 1
+            continue
+
+        applicants = (
+            Application.objects.filter(position=position)
+            .select_related("user")
+        )
+        emails = sorted({app.user.email for app in applicants if app.user and app.user.email})
+        if emails:
+            context = {
+                "scientific_field": position.scientific_field.name,
+            }
+            try:
+                for batch in chunked(emails, 100):
+                    send_template_batch_email("position_closed", batch, context)
+                    sent_emails += len(batch)
+            except Exception as exc:
+                print(f"Position closed email failed ({position.id}): {exc}")
+                continue
+
+        position.closed_notified_at = timezone.now()
+        position.save(update_fields=["closed_notified_at"])
+        sent_positions += 1
+
+    return JsonResponse(
+        {
+            "positions_processed": sent_positions,
+            "positions_skipped": skipped_positions,
+            "emails_sent": sent_emails,
+        },
+        status=200,
+    )
 
 # Get User by Token
 @api_view(["GET"])
