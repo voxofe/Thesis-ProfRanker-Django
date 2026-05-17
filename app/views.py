@@ -1,5 +1,6 @@
 from django.http import JsonResponse, FileResponse
 from django.db import models
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -398,6 +399,88 @@ def user_login(request):
             return JsonResponse({"error": "Invalid credentials"}, status=401)
     except User.DoesNotExist:
         return JsonResponse({"error": "User not found"}, status=404)
+
+
+@csrf_exempt
+@api_view(["GET"])
+def users_list(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    requester = User.objects.filter(id=user_id).first()
+    if not requester or requester.role != "admin":
+        return JsonResponse({"error": "Only admins can view users."}, status=403)
+
+    role = (request.GET.get("role") or "").strip().lower()
+    if role not in {"applicant", "guest", "admin"}:
+        return JsonResponse({"error": "Invalid role."}, status=400)
+
+    users = User.objects.filter(role=role).select_related("profile")
+    data = []
+
+    if role == "applicant":
+        users = users.annotate(applications_count=Count("applications"))
+        for user in users:
+            profile = getattr(user, "profile", None)
+            data.append({
+                "id": user.id,
+                "firstName": user.first_name,
+                "lastName": user.last_name,
+                "email": user.email,
+                "gender": user.gender,
+                "mobileNumber": profile.mobile_number if profile else None,
+                "landlineNumber": profile.landline_number if profile else None,
+                "applicationsCount": user.applications_count or 0,
+            })
+    elif role == "guest":
+        for user in users:
+            data.append({
+                "id": user.id,
+                "firstName": user.first_name,
+                "lastName": user.last_name,
+                "gender": user.gender,
+                "email": user.email,
+                "rankingVisits": user.ranking_visits or 0,
+            })
+    else:
+        for user in users:
+            data.append({
+                "id": user.id,
+                "firstName": user.first_name,
+                "lastName": user.last_name,
+                "email": user.email,
+            })
+
+    return JsonResponse({"users": data}, status=200)
+
+
+@csrf_exempt
+@api_view(["POST"])
+def increment_guest_ranking_visit(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+    if user.role != "guest":
+        return JsonResponse({"error": "Only guests can increment ranking visits."}, status=403)
+
+    user.ranking_visits = (user.ranking_visits or 0) + 1
+    user.save(update_fields=["ranking_visits"])
+    return JsonResponse({"rankingVisits": user.ranking_visits}, status=200)
 
 
 @csrf_exempt
@@ -906,6 +989,36 @@ def profile_detail(request):
     return JsonResponse(response, safe=False)
 
 
+@api_view(["GET"])
+def admin_profile_detail(request, user_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    requester_id = payload.get("user_id")
+    requester = User.objects.filter(id=requester_id).first()
+    if not requester or requester.role != "admin":
+        return JsonResponse({"error": "Only admins can view profiles."}, status=403)
+
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    applications = list(
+        Application.objects.filter(user=user)
+        .select_related("position", "position__scientific_field")
+        .prefetch_related("publications")
+        .order_by("-submitted_at", "-id")
+    )
+
+    return JsonResponse(build_profile_response(user, profile, applications), safe=False)
+
+
 @api_view(["POST"])
 @parser_classes([MultiPartParser, FormParser])
 def profile_documents_upload(request):
@@ -975,9 +1088,12 @@ def profile_document_download(request, doc_key):
 
     file_field = None
     if str(doc_key).isdigit():
-        profile_doc = VaultDocument.objects.filter(
-            id=int(doc_key), user=user
-        ).first()
+        if user.role == "admin":
+            profile_doc = VaultDocument.objects.filter(id=int(doc_key)).first()
+        else:
+            profile_doc = VaultDocument.objects.filter(
+                id=int(doc_key), user=user
+            ).first()
         file_field = profile_doc.file if profile_doc else None
     else:
         mapped_type = doc_type_map.get(doc_key, doc_key)
