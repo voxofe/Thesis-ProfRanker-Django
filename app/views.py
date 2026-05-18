@@ -2069,56 +2069,73 @@ def scientific_fields_collection(request):
         return JsonResponse({"error": "Invalid or expired token."}, status=401)
 
     if request.method == "GET":
-        sfs = ScientificField.objects.all()
+        sfs = ScientificField.objects.select_related("position").prefetch_related("courses", "position__applications")
         available_for_position = request.query_params.get("availableForPosition")
+        tz = ZoneInfo("Europe/Athens")
+        now = timezone.now().astimezone(tz)
+
+        def compute_state(start_date, end_date, start_time, end_time):
+            if not start_date or not end_date:
+                return "pending"
+            start_t = start_time or dt_time(0, 0)
+            end_t = end_time or dt_time(23, 59)
+            start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+            end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+            if now < start_dt:
+                return "pending"
+            if now > end_dt:
+                return "completed"
+            return "active"
+
+        def is_available(sf):
+            pos = getattr(sf, "position", None)
+            if not pos:
+                return True
+            return compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time) == "completed"
+
         if available_for_position and str(available_for_position).lower() in {"1", "true", "yes"}:
-            tz = ZoneInfo("Europe/Athens")
-            now = timezone.now().astimezone(tz)
-
-            def compute_state(start_date, end_date, start_time, end_time):
-                if not start_date or not end_date:
-                    return "pending"
-                start_t = start_time or dt_time(0, 0)
-                end_t = end_time or dt_time(23, 59)
-                start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
-                end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
-                if now < start_dt:
-                    return "pending"
-                if now > end_dt:
-                    return "completed"
-                return "active"
-
-            def is_available(sf):
-                pos = getattr(sf, "position", None)
-                if not pos:
-                    return True
-                return compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time) == "completed"
-
             sfs = [sf for sf in sfs if is_available(sf)]
-        data = [
-            {
-                "id": sf.id,
-                "name": sf.name,
-                "department": sf.department,
-                "school": sf.school,
-                "courses": [
-                    {
-                        "id": course.id,
-                        "name": course.name,
-                        "code": course.code,
-                        "description": course.description,
-                        "semester": course.semester,
-                        "teachingUnits": course.teaching_units,
-                        "ects": course.ects,
-                        "theory_hours": course.theory_hours,
-                        "lab_hours": course.lab_hours,
-                        "category": course.category,
-                    }
-                    for course in sf.courses.all()
-                ]
-            }
-            for sf in sfs
-        ]
+
+        data = []
+        for sf in sfs:
+            pos = getattr(sf, "position", None)
+            if pos:
+                state = compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time)
+                applications_count = pos.applications.count()
+            else:
+                state = "unpublished"
+                applications_count = 0
+
+            data.append(
+                {
+                    "id": sf.id,
+                    "name": sf.name,
+                    "department": sf.department,
+                    "school": sf.school,
+                    "positionId": pos.id if pos else None,
+                    "positionStartDate": pos.start_date if pos else None,
+                    "positionEndDate": pos.end_date if pos else None,
+                    "positionStartTime": pos.start_time.strftime("%H:%M") if pos and pos.start_time else None,
+                    "positionEndTime": pos.end_time.strftime("%H:%M") if pos and pos.end_time else None,
+                    "state": state,
+                    "applications": applications_count,
+                    "courses": [
+                        {
+                            "id": course.id,
+                            "name": course.name,
+                            "code": course.code,
+                            "description": course.description,
+                            "semester": course.semester,
+                            "teachingUnits": course.teaching_units,
+                            "ects": course.ects,
+                            "theory_hours": course.theory_hours,
+                            "lab_hours": course.lab_hours,
+                            "category": course.category,
+                        }
+                        for course in sf.courses.all()
+                    ],
+                }
+            )
         return JsonResponse(data, safe=False)
 
     user_id = payload.get("user_id")
@@ -2172,6 +2189,76 @@ def scientific_fields_collection(request):
         },
         status=201,
     )
+
+
+@api_view(["GET"])
+def scientific_field_detail(request, sf_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token."}, status=401)
+
+    sf = ScientificField.objects.select_related("position").prefetch_related("courses", "position__applications").filter(id=sf_id).first()
+    if not sf:
+        return JsonResponse({"error": "Scientific field not found."}, status=404)
+
+    tz = ZoneInfo("Europe/Athens")
+    now = timezone.now().astimezone(tz)
+
+    def compute_state(start_date, end_date, start_time, end_time):
+        if not start_date or not end_date:
+            return "pending"
+        start_t = start_time or dt_time(0, 0)
+        end_t = end_time or dt_time(23, 59)
+        start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+        end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+        if now < start_dt:
+            return "pending"
+        if now > end_dt:
+            return "completed"
+        return "active"
+
+    pos = getattr(sf, "position", None)
+    if pos:
+        state = compute_state(pos.start_date, pos.end_date, pos.start_time, pos.end_time)
+        applications_count = pos.applications.count()
+    else:
+        state = "unpublished"
+        applications_count = 0
+
+    data = {
+        "id": sf.id,
+        "name": sf.name,
+        "department": sf.department,
+        "school": sf.school,
+        "positionId": pos.id if pos else None,
+        "positionStartDate": pos.start_date if pos else None,
+        "positionEndDate": pos.end_date if pos else None,
+        "positionStartTime": pos.start_time.strftime("%H:%M") if pos and pos.start_time else None,
+        "positionEndTime": pos.end_time.strftime("%H:%M") if pos and pos.end_time else None,
+        "state": state,
+        "applications": applications_count,
+        "courses": [
+            {
+                "id": course.id,
+                "name": course.name,
+                "code": course.code,
+                "description": course.description,
+                "semester": course.semester,
+                "teachingUnits": course.teaching_units,
+                "ects": course.ects,
+                "theory_hours": course.theory_hours,
+                "lab_hours": course.lab_hours,
+                "category": course.category,
+            }
+            for course in sf.courses.all()
+        ],
+    }
+
+    return JsonResponse(data, safe=False)
 
 # Positions collection (list + create)
 @csrf_exempt

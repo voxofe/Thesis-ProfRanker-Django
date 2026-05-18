@@ -43,6 +43,7 @@ urlpatterns = [
     path('api/applicant/<int:application_id>/documents/<str:doc_key>', views.download_applicant_document, name='download_applicant_document'),
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
     path('api/scientific-fields', views.scientific_fields_collection, name='scientific_fields_collection'),
+    path('api/scientific-fields/<int:sf_id>', views.scientific_field_detail, name='scientific_field_detail'),
     path('api/positions', views.positions_collection, name='positions_collection')
 ]
 
