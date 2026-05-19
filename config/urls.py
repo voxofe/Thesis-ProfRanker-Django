@@ -44,7 +44,8 @@ urlpatterns = [
     path('api/applicant/all', views.get_all_scores, name='get_all_scores'),
     path('api/scientific-fields', views.scientific_fields_collection, name='scientific_fields_collection'),
     path('api/scientific-fields/<int:sf_id>', views.scientific_field_detail, name='scientific_field_detail'),
-    path('api/positions', views.positions_collection, name='positions_collection')
+    path('api/positions', views.positions_collection, name='positions_collection'),
+    path('api/positions/<int:position_id>', views.position_detail, name='position_detail')
 ]
 
 if settings.DEBUG:

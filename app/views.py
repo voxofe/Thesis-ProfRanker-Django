@@ -2191,7 +2191,7 @@ def scientific_fields_collection(request):
     )
 
 
-@api_view(["GET"])
+@api_view(["GET", "PUT", "DELETE"])
 def scientific_field_detail(request, sf_id):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -2204,6 +2204,68 @@ def scientific_field_detail(request, sf_id):
     sf = ScientificField.objects.select_related("position").prefetch_related("courses", "position__applications").filter(id=sf_id).first()
     if not sf:
         return JsonResponse({"error": "Scientific field not found."}, status=404)
+
+    if request.method == "DELETE":
+        user_id = payload.get("user_id")
+        user = User.objects.filter(id=user_id).first()
+        if not user or user.role != "admin":
+            return JsonResponse({"error": "Only admins can delete scientific fields."}, status=403)
+        sf.delete()
+        return JsonResponse({"message": "Scientific field deleted successfully."}, status=200)
+
+    if request.method == "PUT":
+        user_id = payload.get("user_id")
+        user = User.objects.filter(id=user_id).first()
+        if not user or user.role != "admin":
+            return JsonResponse({"error": "Only admins can update scientific fields."}, status=403)
+
+        data = request.data
+        name = data.get("name")
+        school = data.get("school")
+        department = data.get("department")
+        courses_json = data.get("courses", "[]")
+
+        try:
+            courses = json.loads(courses_json) if isinstance(courses_json, str) else courses_json
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid courses JSON."}, status=400)
+
+        if not name or not str(name).strip():
+            return JsonResponse({"error": "Scientific field name is required."}, status=400)
+        if not school or school == "select":
+            return JsonResponse({"error": "School is required."}, status=400)
+        if not department or department == "select":
+            return JsonResponse({"error": "Department is required."}, status=400)
+        if not isinstance(courses, list) or len(courses) == 0:
+            return JsonResponse({"error": "At least one course is required."}, status=400)
+
+        sf.name = str(name).strip()
+        sf.school = school
+        sf.department = department
+        sf.save(update_fields=["name", "school", "department"])
+
+        sf.courses.all().delete()
+        for course in courses:
+            Course.objects.create(
+                scientific_field=sf,
+                code=course.get("code"),
+                name=course.get("name"),
+                description=course.get("description"),
+                semester=course.get("semester"),
+                teaching_units=course.get("teaching_units"),
+                ects=course.get("ects"),
+                theory_hours=course.get("theory_hours"),
+                lab_hours=course.get("lab_hours"),
+                category=course.get("category"),
+            )
+
+        return JsonResponse(
+            {
+                "message": "Scientific field updated successfully.",
+                "scientificFieldId": sf.id,
+            },
+            status=200,
+        )
 
     tz = ZoneInfo("Europe/Athens")
     now = timezone.now().astimezone(tz)
@@ -2445,3 +2507,55 @@ def positions_collection(request):
         },
         status=201,
     )
+
+
+@api_view(["DELETE"])
+def position_detail(request, position_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token."}, status=401)
+
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user or user.role != "admin":
+        return JsonResponse({"error": "Only admins can delete positions."}, status=403)
+
+    position = Position.objects.select_related("scientific_field").filter(id=position_id).first()
+    if not position:
+        return JsonResponse({"error": "Position not found."}, status=404)
+
+    tz = ZoneInfo("Europe/Athens")
+    now = timezone.now().astimezone(tz)
+
+    def compute_state(start_date, end_date, start_time, end_time):
+        if not start_date or not end_date:
+            return "pending"
+        start_t = start_time or dt_time(0, 0)
+        end_t = end_time or dt_time(23, 59)
+        start_dt = datetime.combine(start_date, start_t, tzinfo=tz)
+        end_dt = datetime.combine(end_date, end_t, tzinfo=tz)
+        if now < start_dt:
+            return "pending"
+        if now > end_dt:
+            return "completed"
+        return "active"
+
+    state = compute_state(
+        position.start_date,
+        position.end_date,
+        position.start_time,
+        position.end_time,
+    )
+    if state in {"active", "completed"}:
+        return JsonResponse(
+            {"error": "Cannot delete an active or completed position."},
+            status=409,
+        )
+
+    position.delete()
+    return JsonResponse({"message": "Position deleted successfully."}, status=200)
