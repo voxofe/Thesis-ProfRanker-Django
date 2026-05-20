@@ -1,4 +1,5 @@
 from django.db import models
+from pgvector.django import VectorField
 from datetime import time as dt_time
 from django.contrib.auth.hashers import make_password, check_password
 
@@ -154,6 +155,39 @@ class ScientificField(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.department})"
+
+
+class ScientificFieldEmbedding(models.Model):
+    scientific_field = models.ForeignKey(
+        ScientificField,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    model_name = models.CharField(max_length=255)
+    vector = VectorField(dimensions=1536)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Embedding {self.id} - {self.model_name}"
+
+
+class ScientificFieldProfile(models.Model):
+    scientific_field = models.ForeignKey(
+        ScientificField,
+        on_delete=models.CASCADE,
+        related_name="profiles",
+    )
+    source_text = models.TextField()
+    profile_text = models.TextField()
+    keywords = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Profile for {self.scientific_field.name}"
 
 class Course(models.Model):
     SEMESTERS = [

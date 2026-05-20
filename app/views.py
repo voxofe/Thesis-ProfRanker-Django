@@ -22,6 +22,7 @@ from .models import (
     User,
     Position,
     ScientificField,
+    ScientificFieldProfile,
     Course,
     UserProfile,
     ProfilePublication,
@@ -69,6 +70,28 @@ def validate_vault_file(uploaded_file):
     if ext not in ALLOWED_VAULT_EXTENSIONS:
         return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
     return None
+
+
+def normalize_source_text(value):
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
+def build_scientific_field_source_text(name, courses):
+    lines = [f"Επιστημονικό Πεδίο: {normalize_source_text(name)}"]
+    for idx, course in enumerate(courses or [], start=1):
+        course_name = normalize_source_text(course.get("name"))
+        description = normalize_source_text(course.get("description"))
+        lines.extend(
+            [
+                "",
+                f"Μάθημα {idx}: {course_name}",
+                f"Περιγραφή Μαθήματος {idx}:",
+                description,
+            ]
+        )
+    return "\n".join(lines).strip()
 
 SINGLE_DOC_TYPES = {
     "cv",
@@ -2166,6 +2189,14 @@ def scientific_fields_collection(request):
         name=str(name).strip(),
         department=department,
         school=school,
+    )
+
+    source_text = build_scientific_field_source_text(name, courses)
+    ScientificFieldProfile.objects.create(
+        scientific_field=sci_field,
+        source_text=source_text,
+        profile_text="",
+        keywords=[],
     )
 
     for course in courses:
