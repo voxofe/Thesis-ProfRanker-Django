@@ -5,7 +5,6 @@ from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from .serializers import ApplicationSerializer
-from concurrent.futures import ThreadPoolExecutor
 from .services.sjr import get_sjr_quartile
 from .utils.calculate import calculate_points
 from .utils.email_utils import (
@@ -32,7 +31,7 @@ from .models import (
     PhdDegree,
     PhdDocument,
 )
-from .services.phd_pdf import process_phd_pdf
+from .services.rq_queue import enqueue_phd_pdf
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
@@ -41,6 +40,7 @@ from openai import OpenAI
 import logging
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time
 from django.utils import timezone
 from zoneinfo import ZoneInfo
@@ -52,7 +52,6 @@ MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
 PHD_PDF_MAX_BYTES = 30 * 1024 * 1024
 ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
 PHD_ONLY_EXTENSIONS = {".pdf"}
-PHD_PDF_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 logger = logging.getLogger(__name__)
 
@@ -1303,7 +1302,7 @@ def profile_document_manage(request, doc_id):
 
     if request.method == "PUT":
         new_file = request.FILES.get("file")
-        validation_error = validate_vault_file(new_file)
+        validation_error = validate_vault_file(new_file, doc_type=profile_doc.doc_type)
         if validation_error:
             return JsonResponse({"error": validation_error}, status=400)
 
@@ -1360,7 +1359,7 @@ def profile_document_create(request):
         return JsonResponse({"error": "Invalid document type."}, status=400)
 
     new_file = request.FILES.get("file")
-    validation_error = validate_vault_file(new_file)
+    validation_error = validate_vault_file(new_file, doc_type=doc_type)
     if validation_error:
         return JsonResponse({"error": validation_error}, status=400)
 
@@ -1650,7 +1649,7 @@ def handle_form_submission(request):
                 phd_document, _ = PhdDocument.objects.get_or_create(
                     application=application,
                 )
-                phd_document.thesis_title = application.phd_title or ""
+                phd_document.title = application.phd_title or ""
                 phd_document.pdf_file = phd_vault_doc.file
                 phd_document.original_filename = os.path.basename(
                     phd_vault_doc.file.name or ""
@@ -1659,7 +1658,7 @@ def handle_form_submission(request):
                 phd_document.extraction_error = None
                 phd_document.save()
 
-                PHD_PDF_EXECUTOR.submit(process_phd_pdf, phd_document.id)
+                enqueue_phd_pdf(phd_document.id)
 
             def handle_multi_docs(field_key, doc_type, keep_ids_key=None):
                 new_files = request.FILES.getlist(field_key)

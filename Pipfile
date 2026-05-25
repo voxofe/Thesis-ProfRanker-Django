@@ -16,6 +16,8 @@ django = "*"
 pgvector = "*"
 openai = "*"
 pypdf = "*"
+rq = "*"
+redis = "*"
 
 [dev-packages]
 

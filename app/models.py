@@ -149,7 +149,7 @@ class PhdDocument(models.Model):
         on_delete=models.CASCADE,
         related_name="phd_documents",
     )
-    thesis_title = models.CharField(max_length=500)
+    title = models.CharField(max_length=500)
     pdf_file = models.FileField(upload_to=phd_document_upload_path, max_length=255)
     original_filename = models.CharField(max_length=255)
     extracted_raw_text = models.TextField(blank=True, null=True)
