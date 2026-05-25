@@ -30,7 +30,9 @@ from .models import (
     VaultDocument,
     ApplicationDocument,
     PhdDegree,
+    PhdDocument,
 )
+from .services.phd_pdf import process_phd_pdf
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
@@ -47,7 +49,10 @@ import os
 import mimetypes
 
 MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
+PHD_PDF_MAX_BYTES = 30 * 1024 * 1024
 ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
+PHD_ONLY_EXTENSIONS = {".pdf"}
+PHD_PDF_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +70,21 @@ def is_position_active(position, now=None):
     return start_dt <= now <= end_dt
 
 
-def validate_vault_file(uploaded_file):
+def validate_vault_file(uploaded_file, doc_type=None):
     if not uploaded_file:
         return "Missing file."
-    if uploaded_file.size and uploaded_file.size > MAX_VAULT_UPLOAD_BYTES:
-        return "Το αρχείο πρέπει να είναι έως 5MB."
+    max_bytes = PHD_PDF_MAX_BYTES if doc_type == "phd" else MAX_VAULT_UPLOAD_BYTES
+    if uploaded_file.size and uploaded_file.size > max_bytes:
+        max_mb = int(max_bytes / (1024 * 1024))
+        return f"Το αρχείο πρέπει να είναι έως {max_mb}MB."
     filename = uploaded_file.name or ""
     _, ext = os.path.splitext(filename.lower())
-    if ext not in ALLOWED_VAULT_EXTENSIONS:
-        return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
+    if doc_type == "phd":
+        if ext not in PHD_ONLY_EXTENSIONS:
+            return "Επιτρέπονται μόνο αρχεία PDF για το διδακτορικό."
+    else:
+        if ext not in ALLOWED_VAULT_EXTENSIONS:
+            return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
     return None
 
 
@@ -1531,6 +1542,9 @@ def handle_form_submission(request):
                 doc_id_value = form_data.get(doc_id_key)
 
                 if new_file:
+                    validation_error = validate_vault_file(new_file, doc_type=doc_type)
+                    if validation_error:
+                        raise ValueError(validation_error)
                     profile_doc = VaultDocument(
                         user=user,
                         doc_type=doc_type,
@@ -1631,6 +1645,21 @@ def handle_form_submission(request):
                 application.phd_degree = degree
 
             application.save()
+
+            if phd_vault_doc:
+                phd_document, _ = PhdDocument.objects.get_or_create(
+                    application=application,
+                )
+                phd_document.thesis_title = application.phd_title or ""
+                phd_document.pdf_file = phd_vault_doc.file
+                phd_document.original_filename = os.path.basename(
+                    phd_vault_doc.file.name or ""
+                )
+                phd_document.extraction_status = "pending"
+                phd_document.extraction_error = None
+                phd_document.save()
+
+                PHD_PDF_EXECUTOR.submit(process_phd_pdf, phd_document.id)
 
             def handle_multi_docs(field_key, doc_type, keep_ids_key=None):
                 new_files = request.FILES.getlist(field_key)

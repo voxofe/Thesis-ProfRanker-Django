@@ -15,6 +15,7 @@ pyjwt = "*"
 django = "*"
 pgvector = "*"
 openai = "*"
+pypdf = "*"
 
 [dev-packages]
 

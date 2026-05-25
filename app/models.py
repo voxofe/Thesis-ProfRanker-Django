@@ -11,6 +11,12 @@ def vault_document_upload_path(instance, filename):
         return f"documents/user_{user_id}/application_{application_id}/{filename}"
     return f"documents/user_{user_id}/vault/{filename}"
 
+
+def phd_document_upload_path(instance, filename):
+    application_id = instance.application_id or "unknown"
+    user_id = instance.application.user_id if instance.application_id else "unknown"
+    return f"documents/user_{user_id}/application_{application_id}/phd/{filename}"
+
 class User(models.Model):
     ROLES = [
         ('admin', 'Admin'),
@@ -129,6 +135,33 @@ class PhdDegree(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.title} ({self.acquired_at})"
+
+
+class PhdDocument(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("success", "Success"),
+        ("failed", "Failed"),
+    ]
+
+    application = models.ForeignKey(
+        "Application",
+        on_delete=models.CASCADE,
+        related_name="phd_documents",
+    )
+    thesis_title = models.CharField(max_length=500)
+    pdf_file = models.FileField(upload_to=phd_document_upload_path, max_length=255)
+    original_filename = models.CharField(max_length=255)
+    extracted_raw_text = models.TextField(blank=True, null=True)
+    extraction_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    extraction_error = models.TextField(blank=True, null=True)
+    page_count = models.PositiveIntegerField(null=True, blank=True)
+    extracted_text_length = models.PositiveIntegerField(default=0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PhD Document for Application {self.application_id}"
 
 
 class ApplicationDocument(models.Model):
