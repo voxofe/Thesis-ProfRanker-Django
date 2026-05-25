@@ -23,6 +23,7 @@ from .models import (
     Position,
     ScientificField,
     ScientificFieldProfile,
+    ScientificFieldEmbedding,
     Course,
     UserProfile,
     ProfilePublication,
@@ -34,6 +35,8 @@ from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.core.files.base import File
+from openai import OpenAI
+import logging
 import time
 import json
 from datetime import datetime, time as dt_time
@@ -45,6 +48,8 @@ import mimetypes
 
 MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
 ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
+
+logger = logging.getLogger(__name__)
 
 
 def is_position_active(position, now=None):
@@ -92,6 +97,117 @@ def build_scientific_field_source_text(name, courses):
             ]
         )
     return "\n".join(lines).strip()
+
+
+def get_openai_client():
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        logger.warning("OPENAI_API_KEY is missing; skipping translation/keyword extraction.")
+        return None
+    return OpenAI(api_key=api_key)
+
+
+def translate_source_text(source_text, model):
+    client = get_openai_client()
+    if not client:
+        return ""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Translate Greek academic text to English. Preserve meaning, keep academic tone, and keep proper nouns. Return only the translated text.",
+                },
+                {"role": "user", "content": source_text},
+            ],
+            temperature=0,
+        )
+    except Exception as exc:
+        logger.exception("Translation request failed: %s", exc)
+        return ""
+    translated = (response.choices[0].message.content or "").strip()
+    if not translated:
+        logger.warning("Translation returned empty content.")
+    return translated
+
+
+def extract_keywords_bilingual(source_text, model):
+    client = get_openai_client()
+    if not client:
+        return [], []
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You extract academic keywords from Greek text.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Εξήγαγε 8–15 ακαδημαϊκές λέξεις-κλειδιά που περιγράφουν το επιστημονικό πεδίο. "
+                        "Μην εισάγεις έννοιες που δεν υπάρχουν ή δεν τεκμηριώνονται από το κείμενο. "
+                        "Δώσε τις λέξεις στα ελληνικά και, όπου είναι χρήσιμο, αγγλικό ισοδύναμο. "
+                        "Επέστρεψε μόνο JSON με τα κλειδιά keywords_gr και keywords_en (λίστες).\n\n"
+                        f"Κείμενο:\n{source_text}"
+                    ),
+                },
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.exception("Keyword extraction request failed: %s", exc)
+        return [], []
+    content = response.choices[0].message.content or "{}"
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("Keyword extraction returned invalid JSON: %s", content)
+        return [], []
+    keywords_gr = [str(k).strip() for k in data.get("keywords_gr", []) if str(k).strip()]
+    keywords_en = [str(k).strip() for k in data.get("keywords_en", []) if str(k).strip()]
+    if not keywords_gr and not keywords_en:
+        logger.warning("Keyword extraction returned empty lists.")
+    return keywords_gr, keywords_en
+
+
+def generate_embedding(text, model):
+    client = get_openai_client()
+    if not client or not text:
+        return None
+    try:
+        response = client.embeddings.create(model=model, input=text)
+    except Exception as exc:
+        logger.exception("Embedding request failed: %s", exc)
+        return None
+    if not response.data:
+        logger.warning("Embedding response had no data.")
+        return None
+    return response.data[0].embedding
+
+
+def upsert_scientific_field_embeddings(scientific_field, profile_text, profile_text_en, model):
+    ScientificFieldEmbedding.objects.filter(scientific_field=scientific_field).delete()
+    embedding_gr = generate_embedding(profile_text, model)
+    if embedding_gr:
+        ScientificFieldEmbedding.objects.create(
+            scientific_field=scientific_field,
+            model_name=model,
+            language="gr",
+            vector=embedding_gr,
+        )
+
+    embedding_en = generate_embedding(profile_text_en, model)
+    if embedding_en:
+        ScientificFieldEmbedding.objects.create(
+            scientific_field=scientific_field,
+            model_name=model,
+            language="en",
+            vector=embedding_en,
+        )
 
 SINGLE_DOC_TYPES = {
     "cv",
@@ -2192,11 +2308,40 @@ def scientific_fields_collection(request):
     )
 
     source_text = build_scientific_field_source_text(name, courses)
+    model = "gpt-4.1"
+    logger.info("Generating keywords/translation for scientific field %s", sci_field.id)
+    source_text_en = translate_source_text(source_text, model)
+    keywords_gr, keywords_en = extract_keywords_bilingual(source_text, model)
+    logger.info(
+        "Generated keywords for scientific field %s (gr=%s, en=%s)",
+        sci_field.id,
+        len(keywords_gr),
+        len(keywords_en),
+    )
+
+    profile_text = source_text
+    if keywords_gr:
+        profile_text = f"{source_text}\n\nKeywords:\n{', '.join(keywords_gr)}"
+
+    profile_text_en = source_text_en
+    if source_text_en and keywords_en:
+        profile_text_en = f"{source_text_en}\n\nKeywords:\n{', '.join(keywords_en)}"
+
     ScientificFieldProfile.objects.create(
         scientific_field=sci_field,
         source_text=source_text,
-        profile_text="",
-        keywords=[],
+        source_text_en=source_text_en,
+        profile_text=profile_text,
+        profile_text_en=profile_text_en,
+        keywords=keywords_gr,
+        keywords_en=keywords_en,
+    )
+
+    upsert_scientific_field_embeddings(
+        sci_field,
+        profile_text,
+        profile_text_en,
+        "text-embedding-3-small",
     )
 
     for course in courses:
@@ -2289,6 +2434,42 @@ def scientific_field_detail(request, sf_id):
                 lab_hours=course.get("lab_hours"),
                 category=course.get("category"),
             )
+
+        source_text = build_scientific_field_source_text(name, courses)
+        model = "gpt-4.1"
+        logger.info("Regenerating keywords/translation for scientific field %s", sf.id)
+        source_text_en = translate_source_text(source_text, model)
+        keywords_gr, keywords_en = extract_keywords_bilingual(source_text, model)
+        logger.info(
+            "Regenerated keywords for scientific field %s (gr=%s, en=%s)",
+            sf.id,
+            len(keywords_gr),
+            len(keywords_en),
+        )
+
+        profile_text = source_text
+        if keywords_gr:
+            profile_text = f"{source_text}\n\nKeywords:\n{', '.join(keywords_gr)}"
+
+        profile_text_en = source_text_en
+        if source_text_en and keywords_en:
+            profile_text_en = f"{source_text_en}\n\nKeywords:\n{', '.join(keywords_en)}"
+
+        profile, _ = ScientificFieldProfile.objects.get_or_create(scientific_field=sf)
+        profile.source_text = source_text
+        profile.source_text_en = source_text_en
+        profile.profile_text = profile_text
+        profile.profile_text_en = profile_text_en
+        profile.keywords = keywords_gr
+        profile.keywords_en = keywords_en
+        profile.save()
+
+        upsert_scientific_field_embeddings(
+            sf,
+            profile_text,
+            profile_text_en,
+            "text-embedding-3-small",
+        )
 
         return JsonResponse(
             {

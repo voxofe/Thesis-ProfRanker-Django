@@ -158,12 +158,17 @@ class ScientificField(models.Model):
 
 
 class ScientificFieldEmbedding(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
     scientific_field = models.ForeignKey(
         ScientificField,
         on_delete=models.CASCADE,
         related_name="embeddings",
     )
     model_name = models.CharField(max_length=255)
+    language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default="gr")
     vector = VectorField(dimensions=1536)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -178,8 +183,11 @@ class ScientificFieldProfile(models.Model):
         related_name="profiles",
     )
     source_text = models.TextField()
+    source_text_en = models.TextField(blank=True, null=True)
     profile_text = models.TextField()
+    profile_text_en = models.TextField(blank=True, null=True)
     keywords = models.JSONField(default=list)
+    keywords_en = models.JSONField(default=list)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
