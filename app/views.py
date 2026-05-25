@@ -30,8 +30,10 @@ from .models import (
     ApplicationDocument,
     PhdDegree,
     PhdDocument,
+    PhdCheck,
 )
-from .services.rq_queue import enqueue_phd_pdf
+from .services.phd_pdf import process_phd_pdf
+from .services.rq_queue import enqueue_phd_check
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
@@ -40,7 +42,6 @@ from openai import OpenAI
 import logging
 import time
 import json
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time
 from django.utils import timezone
 from zoneinfo import ZoneInfo
@@ -884,6 +885,25 @@ def build_profile_response(user, profile, applications=None):
             }
         )
 
+    latest_phd_checks = {}
+    for check in (
+        PhdCheck.objects.filter(user=user, vault_document__doc_type="phd")
+        .select_related("vault_document")
+        .order_by("vault_document_id", "-updated_at", "-id")
+    ):
+        doc_id = check.vault_document_id
+        if doc_id in latest_phd_checks:
+            continue
+        latest_phd_checks[str(doc_id)] = {
+            "id": check.id,
+            "status": check.extraction_status,
+            "error": check.extraction_error,
+            "pageCount": check.page_count,
+            "extractedTextLength": check.extracted_text_length,
+            "updatedAt": check.updated_at.isoformat() if check.updated_at else None,
+            "vaultDocument": profile_doc_info(check.vault_document),
+        }
+
     return {
         "user": {
             "id": user.id,
@@ -903,9 +923,6 @@ def build_profile_response(user, profile, applications=None):
             "isPublicEmployee": bool(profile.is_public_employee),
             "isEuCitizenNonGreek": bool(profile.is_eu_citizen_non_greek),
             "hasNotParticipatedInPastProgram": bool(profile.has_not_participated_in_past_program),
-            "phdTitle": profile.phd_title,
-            "phdAcquisitionDate": profile.phd_acquisition_date,
-            "phdIsFromForeignInstitute": bool(profile.phd_is_from_foreign_institute),
             "workExperience": profile.work_experience,
         },
         "documents": {
@@ -928,6 +945,7 @@ def build_profile_response(user, profile, applications=None):
             ),
         },
         "phdDegrees": phd_degrees,
+        "latestPhdChecks": latest_phd_checks,
         "documentVault": document_vault,
         "applications": applications_data,
         "profilePublications": profile_publications,
@@ -988,13 +1006,6 @@ def profile_detail(request):
         has_not_participated_in_past_program = application_defaults.get(
             "hasNotParticipatedInPastProgram",
             data.get("hasNotParticipatedInPastProgram"),
-        )
-        phd_title = application_defaults.get("phdTitle", data.get("phdTitle"))
-        phd_acquisition_date = application_defaults.get(
-            "phdAcquisitionDate", data.get("phdAcquisitionDate")
-        )
-        phd_is_from_foreign_institute = application_defaults.get(
-            "phdIsFromForeignInstitute", data.get("phdIsFromForeignInstitute")
         )
         work_experience = application_defaults.get(
             "workExperience", data.get("workExperience")
@@ -1071,16 +1082,6 @@ def profile_detail(request):
         if has_not_participated_in_past_program is not None:
             profile.has_not_participated_in_past_program = coerce_bool(
                 has_not_participated_in_past_program
-            )
-        if phd_title is not None:
-            profile.phd_title = phd_title or None
-        if phd_acquisition_date is not None:
-            profile.phd_acquisition_date = (
-                phd_acquisition_date or None
-            )
-        if phd_is_from_foreign_institute is not None:
-            profile.phd_is_from_foreign_institute = coerce_bool(
-                phd_is_from_foreign_institute
             )
         if work_experience is not None:
             if work_experience == "":
@@ -1374,6 +1375,137 @@ def profile_document_create(request):
 
     return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+def phd_check_create(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    uploaded_file = request.FILES.get("file")
+    vault_doc_id = request.data.get("vaultDocumentId")
+    vault_doc = None
+
+    if uploaded_file:
+        validation_error = validate_vault_file(uploaded_file, doc_type="phd")
+        if validation_error:
+            return JsonResponse({"error": validation_error}, status=400)
+        vault_doc = VaultDocument.objects.create(
+            user=user,
+            doc_type="phd",
+            file=uploaded_file,
+            is_default=False,
+        )
+    elif vault_doc_id:
+        vault_doc = VaultDocument.objects.filter(
+            id=vault_doc_id,
+            user=user,
+            doc_type="phd",
+        ).first()
+        if not vault_doc:
+            return JsonResponse({"error": "Document not found."}, status=404)
+    else:
+        return JsonResponse({"error": "Missing file."}, status=400)
+
+    phd_check = PhdCheck.objects.create(
+        user=user,
+        vault_document=vault_doc,
+        extraction_status="pending",
+    )
+    enqueue_phd_check(phd_check.id)
+    return JsonResponse(
+        {
+            "id": phd_check.id,
+            "status": phd_check.extraction_status,
+            "vaultDocument": profile_doc_info(vault_doc),
+        },
+        status=200,
+    )
+
+
+@api_view(["GET"])
+def phd_check_detail(request, check_id):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    phd_check = PhdCheck.objects.filter(id=check_id, user=user).first()
+    if not phd_check:
+        return JsonResponse({"error": "Check not found."}, status=404)
+
+    return JsonResponse(
+        {
+            "id": phd_check.id,
+            "status": phd_check.extraction_status,
+            "error": phd_check.extraction_error,
+            "pageCount": phd_check.page_count,
+            "extractedTextLength": phd_check.extracted_text_length,
+            "updatedAt": phd_check.updated_at.isoformat() if phd_check.updated_at else None,
+            "vaultDocument": profile_doc_info(phd_check.vault_document),
+        },
+        status=200,
+    )
+
+
+@api_view(["GET"])
+def phd_check_latest(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    vault_document_id = request.query_params.get("vaultDocumentId")
+    if not vault_document_id:
+        return JsonResponse({"error": "Missing vaultDocumentId."}, status=400)
+
+    phd_check = (
+        PhdCheck.objects.filter(user=user, vault_document_id=vault_document_id)
+        .order_by("-updated_at", "-id")
+        .first()
+    )
+    if not phd_check:
+        return JsonResponse({"status": "none"}, status=200)
+
+    return JsonResponse(
+        {
+            "id": phd_check.id,
+            "status": phd_check.extraction_status,
+            "error": phd_check.extraction_error,
+            "pageCount": phd_check.page_count,
+            "extractedTextLength": phd_check.extracted_text_length,
+            "updatedAt": phd_check.updated_at.isoformat() if phd_check.updated_at else None,
+            "vaultDocument": profile_doc_info(phd_check.vault_document),
+        },
+        status=200,
+    )
+
 # Handle Form Submission
 def process_publication(publication):
     if publication.get("type") == "journal":
@@ -1529,9 +1661,6 @@ def handle_form_submission(request):
             profile.is_public_employee = application.is_public_employee
             profile.is_eu_citizen_non_greek = application.is_eu_citizen_non_greek
             profile.has_not_participated_in_past_program = application.has_not_participated_in_past_program
-            profile.phd_title = application.phd_title
-            profile.phd_acquisition_date = application.phd_acquisition_date
-            profile.phd_is_from_foreign_institute = application.phd_is_from_foreign_institute
             profile.work_experience = application.work_experience
             profile.save()
 
@@ -1649,7 +1778,7 @@ def handle_form_submission(request):
                 phd_document, _ = PhdDocument.objects.get_or_create(
                     application=application,
                 )
-                phd_document.title = application.phd_title or ""
+                phd_document.thesis_title = application.phd_title or ""
                 phd_document.pdf_file = phd_vault_doc.file
                 phd_document.original_filename = os.path.basename(
                     phd_vault_doc.file.name or ""
