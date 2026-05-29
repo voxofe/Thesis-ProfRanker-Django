@@ -13,9 +13,11 @@ def vault_document_upload_path(instance, filename):
 
 
 def phd_document_upload_path(instance, filename):
-    application_id = instance.application_id or "unknown"
-    user_id = instance.application.user_id if instance.application_id else "unknown"
+    application_id = getattr(instance, "application_id", None) or "unknown"
+    user_id = getattr(instance.application, "user_id", None) if application_id != "unknown" else "unknown"
     return f"documents/user_{user_id}/application_{application_id}/phd/{filename}"
+
+
 
 class User(models.Model):
     ROLES = [
@@ -127,6 +129,8 @@ class PhdDegree(models.Model):
         blank=True,
         related_name="phd_doatap_documents",
     )
+    abstract = models.TextField(blank=True, null=True)
+    keywords = models.JSONField(default=list, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -134,63 +138,46 @@ class PhdDegree(models.Model):
         return f"{self.user.email} - {self.title} ({self.acquired_at})"
 
 
-class PhdDocument(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("success", "Success"),
-        ("failed", "Failed"),
-    ]
-
-    application = models.ForeignKey(
-        "Application",
+class PhdProfile(models.Model):
+    phd_degree = models.OneToOneField(
+        PhdDegree,
         on_delete=models.CASCADE,
-        related_name="phd_documents",
+        related_name="profile",
     )
-    title = models.CharField(max_length=500)
-    pdf_file = models.FileField(upload_to=phd_document_upload_path, max_length=255)
-    original_filename = models.CharField(max_length=255)
-    extracted_raw_text = models.TextField(blank=True, null=True)
-    extraction_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-    extraction_error = models.TextField(blank=True, null=True)
-    page_count = models.PositiveIntegerField(null=True, blank=True)
-    extracted_text_length = models.PositiveIntegerField(default=0)
-    uploaded_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"PhD Document for Application {self.application_id}"
-
-
-class PhdCheck(models.Model):
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("success", "Success"),
-        ("failed", "Failed"),
-    ]
-
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="phd_checks")
-    vault_document = models.ForeignKey(
-        VaultDocument,
-        on_delete=models.CASCADE,
-        related_name="phd_checks",
-    )
-    phd_document = models.ForeignKey(
-        PhdDocument,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="phd_checks",
-    )
-    extracted_raw_text = models.TextField(blank=True, null=True)
-    extraction_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-    extraction_error = models.TextField(blank=True, null=True)
-    page_count = models.PositiveIntegerField(null=True, blank=True)
-    extracted_text_length = models.PositiveIntegerField(default=0)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    abstract = models.TextField(blank=True, null=True)
+    keywords = models.JSONField(default=list, blank=True, null=True)
+    profile_text = models.TextField(blank=True, null=True)
+    title_en = models.CharField(max_length=255, blank=True, null=True)
+    abstract_en = models.TextField(blank=True, null=True)
+    keywords_en = models.JSONField(default=list, blank=True, null=True)
+    profile_text_en = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"PhD Check {self.id} - {self.user_id}"
+        return f"PhD Profile {self.id} - {self.phd_degree_id}"
+
+
+class PhdEmbedding(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
+    phd_degree = models.ForeignKey(
+        PhdDegree,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    model_name = models.CharField(max_length=255)
+    language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default="gr")
+    vector = VectorField(dimensions=1536)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"PhD Embedding {self.id} - {self.model_name}"
+
+
 
 
 class ApplicationDocument(models.Model):
@@ -304,6 +291,8 @@ class Application(models.Model):
     phd_title = models.CharField(max_length=255, blank=True, null=True)
     phd_acquisition_date = models.DateField(blank=True, null=True)
     phd_is_from_foreign_institute = models.BooleanField(default=False, blank=True, null=True)
+    phd_abstract = models.TextField(blank=True, null=True)
+    phd_keywords = models.JSONField(default=list, blank=True, null=True)
     work_experience = models.IntegerField(blank=True, null=True)
     has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)
     is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)

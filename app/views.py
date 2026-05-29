@@ -29,11 +29,9 @@ from .models import (
     VaultDocument,
     ApplicationDocument,
     PhdDegree,
-    PhdDocument,
-    PhdCheck,
+    PhdProfile,
+    PhdEmbedding,
 )
-from .services.phd_pdf import process_phd_pdf
-from .services.rq_queue import enqueue_phd_check
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
@@ -43,6 +41,7 @@ import logging
 import time
 import json
 from datetime import datetime, time as dt_time
+from concurrent.futures import ThreadPoolExecutor
 from django.utils import timezone
 from zoneinfo import ZoneInfo
 from app.constants.departments import get_school_of_department
@@ -52,7 +51,10 @@ import mimetypes
 MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
 PHD_PDF_MAX_BYTES = 30 * 1024 * 1024
 ALLOWED_VAULT_EXTENSIONS = {".pdf", ".doc", ".docx", ".odt"}
-PHD_ONLY_EXTENSIONS = {".pdf"}
+PHD_ABSTRACT_MIN_WORDS = 200
+PHD_ABSTRACT_MAX_WORDS = 1000
+PHD_KEYWORDS_MIN = 3
+PHD_KEYWORDS_MAX = 10
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +81,8 @@ def validate_vault_file(uploaded_file, doc_type=None):
         return f"Το αρχείο πρέπει να είναι έως {max_mb}MB."
     filename = uploaded_file.name or ""
     _, ext = os.path.splitext(filename.lower())
-    if doc_type == "phd":
-        if ext not in PHD_ONLY_EXTENSIONS:
-            return "Επιτρέπονται μόνο αρχεία PDF για το διδακτορικό."
-    else:
-        if ext not in ALLOWED_VAULT_EXTENSIONS:
-            return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
+    if ext not in ALLOWED_VAULT_EXTENSIONS:
+        return "Επιτρέπονται μόνο αρχεία PDF, DOC, DOCX, ODT."
     return None
 
 
@@ -140,6 +138,99 @@ def translate_source_text(source_text, model):
     translated = (response.choices[0].message.content or "").strip()
     if not translated:
         logger.warning("Translation returned empty content.")
+    return translated
+
+
+def detect_language(source_text, model):
+    client = get_openai_client()
+    if not client or not source_text:
+        return "gr"
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Detect the language of the text. Return JSON with key language set to 'gr' or 'en'.",
+                },
+                {"role": "user", "content": source_text},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.exception("Language detection failed: %s", exc)
+        return "gr"
+    content = response.choices[0].message.content or "{}"
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("Language detection returned invalid JSON: %s", content)
+        return "gr"
+    language = str(data.get("language", "gr")).lower().strip()
+    return "en" if language == "en" else "gr"
+
+
+def translate_text(source_text, target_language, model):
+    client = get_openai_client()
+    if not client or not source_text:
+        return ""
+    target_label = "Greek" if target_language == "gr" else "English"
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Translate academic text to {target_label}. Preserve meaning, keep academic tone, and keep proper nouns. "
+                        "Return only the translated text."
+                    ),
+                },
+                {"role": "user", "content": source_text},
+            ],
+            temperature=0,
+        )
+    except Exception as exc:
+        logger.exception("Translation request failed: %s", exc)
+        return ""
+    translated = (response.choices[0].message.content or "").strip()
+    if not translated:
+        logger.warning("Translation returned empty content.")
+    return translated
+
+
+def translate_keywords(keywords, target_language, model):
+    client = get_openai_client()
+    if not client or not keywords:
+        return []
+    target_label = "Greek" if target_language == "gr" else "English"
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Translate keyword list to {target_label}. Preserve academic terms. "
+                        "Return JSON with key keywords as a list of strings."
+                    ),
+                },
+                {"role": "user", "content": json.dumps({"keywords": keywords})},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.exception("Keyword translation failed: %s", exc)
+        return []
+    content = response.choices[0].message.content or "{}"
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        logger.warning("Keyword translation returned invalid JSON: %s", content)
+        return []
+    translated = [str(k).strip() for k in data.get("keywords", []) if str(k).strip()]
     return translated
 
 
@@ -215,6 +306,44 @@ def upsert_scientific_field_embeddings(scientific_field, profile_text, profile_t
     if embedding_en:
         ScientificFieldEmbedding.objects.create(
             scientific_field=scientific_field,
+            model_name=model,
+            language="en",
+            vector=embedding_en,
+        )
+
+
+def build_phd_profile_text(title, abstract, keywords, language):
+    if language == "en":
+        title_label = "Thesis Title"
+        abstract_label = "Abstract"
+        keywords_label = "Keywords"
+    else:
+        title_label = "Τίτλος διατριβής"
+        abstract_label = "Περίληψη"
+        keywords_label = "Λέξεις-κλειδιά"
+    text = f"{title_label}: {normalize_source_text(title)}".strip()
+    if abstract:
+        text = f"{text}\n\n{abstract_label}:\n{normalize_source_text(abstract)}"
+    if keywords:
+        text = f"{text}\n\n{keywords_label}:\n{', '.join([normalize_source_text(k) for k in keywords])}"
+    return text.strip()
+
+
+def upsert_phd_embeddings(phd_degree, profile_text, profile_text_en, model):
+    PhdEmbedding.objects.filter(phd_degree=phd_degree).delete()
+    embedding_gr = generate_embedding(profile_text, model)
+    if embedding_gr:
+        PhdEmbedding.objects.create(
+            phd_degree=phd_degree,
+            model_name=model,
+            language="gr",
+            vector=embedding_gr,
+        )
+
+    embedding_en = generate_embedding(profile_text_en, model)
+    if embedding_en:
+        PhdEmbedding.objects.create(
+            phd_degree=phd_degree,
             model_name=model,
             language="en",
             vector=embedding_en,
@@ -404,6 +533,8 @@ def build_application_form(app):
         "phdAcquisitionDate": app.phd_acquisition_date,
         "phdIsFromForeignInstitute": app.phd_is_from_foreign_institute,
         "phdDegreeId": app.phd_degree_id,
+        "phdAbstract": app.phd_abstract or "",
+        "phdKeywords": app.phd_keywords or [],
         "scientificField": app.position.scientific_field.name if app.position else None,
         "workExperience": app.work_experience,
         "hasNotParticipatedInPastProgram": app.has_not_participated_in_past_program,
@@ -878,31 +1009,14 @@ def build_profile_response(user, profile, applications=None):
                 "title": degree.title,
                 "acquiredAt": degree.acquired_at,
                 "isForeignInstitute": bool(degree.is_foreign_institute),
+                "abstract": degree.abstract or "",
+                "keywords": degree.keywords or [],
                 "document": profile_doc_info(degree.vault_document),
                 "doatapDocument": profile_doc_info(degree.doatap_document)
                 if degree.is_foreign_institute
                 else None,
             }
         )
-
-    latest_phd_checks = {}
-    for check in (
-        PhdCheck.objects.filter(user=user, vault_document__doc_type="phd")
-        .select_related("vault_document")
-        .order_by("vault_document_id", "-updated_at", "-id")
-    ):
-        doc_id = check.vault_document_id
-        if doc_id in latest_phd_checks:
-            continue
-        latest_phd_checks[str(doc_id)] = {
-            "id": check.id,
-            "status": check.extraction_status,
-            "error": check.extraction_error,
-            "pageCount": check.page_count,
-            "extractedTextLength": check.extracted_text_length,
-            "updatedAt": check.updated_at.isoformat() if check.updated_at else None,
-            "vaultDocument": profile_doc_info(check.vault_document),
-        }
 
     return {
         "user": {
@@ -945,7 +1059,6 @@ def build_profile_response(user, profile, applications=None):
             ),
         },
         "phdDegrees": phd_degrees,
-        "latestPhdChecks": latest_phd_checks,
         "documentVault": document_vault,
         "applications": applications_data,
         "profilePublications": profile_publications,
@@ -1134,6 +1247,54 @@ def profile_detail(request):
                     db_publication.delete()
 
         profile.save()
+
+        def parse_keywords(value):
+            if value is None:
+                return []
+            if isinstance(value, list):
+                items = [str(item).strip() for item in value if str(item).strip()]
+            elif isinstance(value, str):
+                if value.strip() == "":
+                    items = []
+                else:
+                    try:
+                        parsed = json.loads(value)
+                        if isinstance(parsed, list):
+                            items = [str(item).strip() for item in parsed if str(item).strip()]
+                        else:
+                            items = [value.strip()]
+                    except json.JSONDecodeError:
+                        items = [value.strip()]
+            else:
+                items = [str(value).strip()] if str(value).strip() else []
+            deduped = []
+            seen = set()
+            for item in items:
+                key = item.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(item)
+            return deduped
+
+        phd_degree_id = data.get("phdDegreeId")
+        if phd_degree_id not in {None, "", "null", "None"}:
+            try:
+                degree = PhdDegree.objects.filter(id=int(phd_degree_id), user=user).first()
+            except (TypeError, ValueError):
+                degree = None
+            if degree:
+                if "phdTitle" in data:
+                    degree.title = data.get("phdTitle") or ""
+                if "phdAcquisitionDate" in data:
+                    degree.acquired_at = data.get("phdAcquisitionDate") or degree.acquired_at
+                if "phdIsFromForeignInstitute" in data:
+                    degree.is_foreign_institute = coerce_bool(data.get("phdIsFromForeignInstitute"))
+                if "phdAbstract" in data:
+                    degree.abstract = data.get("phdAbstract") or ""
+                if "phdKeywords" in data:
+                    degree.keywords = parse_keywords(data.get("phdKeywords"))
+                degree.save()
 
     response = build_profile_response(user, profile, applications)
     return JsonResponse(response, safe=False)
@@ -1376,136 +1537,6 @@ def profile_document_create(request):
     return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
 
-@api_view(["POST"])
-@parser_classes([MultiPartParser, FormParser])
-def phd_check_create(request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JsonResponse({"error": "Authorization token missing."}, status=401)
-    token = auth_header.split(" ")[1]
-
-    payload = decode_jwt(token)
-    if not payload:
-        return JsonResponse({"error": "Invalid or expired token"}, status=401)
-    user_id = payload.get("user_id")
-    user = User.objects.filter(id=user_id).first()
-    if not user:
-        return JsonResponse({"error": "User not found"}, status=404)
-
-    uploaded_file = request.FILES.get("file")
-    vault_doc_id = request.data.get("vaultDocumentId")
-    vault_doc = None
-
-    if uploaded_file:
-        validation_error = validate_vault_file(uploaded_file, doc_type="phd")
-        if validation_error:
-            return JsonResponse({"error": validation_error}, status=400)
-        vault_doc = VaultDocument.objects.create(
-            user=user,
-            doc_type="phd",
-            file=uploaded_file,
-            is_default=False,
-        )
-    elif vault_doc_id:
-        vault_doc = VaultDocument.objects.filter(
-            id=vault_doc_id,
-            user=user,
-            doc_type="phd",
-        ).first()
-        if not vault_doc:
-            return JsonResponse({"error": "Document not found."}, status=404)
-    else:
-        return JsonResponse({"error": "Missing file."}, status=400)
-
-    phd_check = PhdCheck.objects.create(
-        user=user,
-        vault_document=vault_doc,
-        extraction_status="pending",
-    )
-    enqueue_phd_check(phd_check.id)
-    return JsonResponse(
-        {
-            "id": phd_check.id,
-            "status": phd_check.extraction_status,
-            "vaultDocument": profile_doc_info(vault_doc),
-        },
-        status=200,
-    )
-
-
-@api_view(["GET"])
-def phd_check_detail(request, check_id):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JsonResponse({"error": "Authorization token missing."}, status=401)
-    token = auth_header.split(" ")[1]
-
-    payload = decode_jwt(token)
-    if not payload:
-        return JsonResponse({"error": "Invalid or expired token"}, status=401)
-    user_id = payload.get("user_id")
-    user = User.objects.filter(id=user_id).first()
-    if not user:
-        return JsonResponse({"error": "User not found"}, status=404)
-
-    phd_check = PhdCheck.objects.filter(id=check_id, user=user).first()
-    if not phd_check:
-        return JsonResponse({"error": "Check not found."}, status=404)
-
-    return JsonResponse(
-        {
-            "id": phd_check.id,
-            "status": phd_check.extraction_status,
-            "error": phd_check.extraction_error,
-            "pageCount": phd_check.page_count,
-            "extractedTextLength": phd_check.extracted_text_length,
-            "updatedAt": phd_check.updated_at.isoformat() if phd_check.updated_at else None,
-            "vaultDocument": profile_doc_info(phd_check.vault_document),
-        },
-        status=200,
-    )
-
-
-@api_view(["GET"])
-def phd_check_latest(request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JsonResponse({"error": "Authorization token missing."}, status=401)
-    token = auth_header.split(" ")[1]
-
-    payload = decode_jwt(token)
-    if not payload:
-        return JsonResponse({"error": "Invalid or expired token"}, status=401)
-    user_id = payload.get("user_id")
-    user = User.objects.filter(id=user_id).first()
-    if not user:
-        return JsonResponse({"error": "User not found"}, status=404)
-
-    vault_document_id = request.query_params.get("vaultDocumentId")
-    if not vault_document_id:
-        return JsonResponse({"error": "Missing vaultDocumentId."}, status=400)
-
-    phd_check = (
-        PhdCheck.objects.filter(user=user, vault_document_id=vault_document_id)
-        .order_by("-updated_at", "-id")
-        .first()
-    )
-    if not phd_check:
-        return JsonResponse({"status": "none"}, status=200)
-
-    return JsonResponse(
-        {
-            "id": phd_check.id,
-            "status": phd_check.extraction_status,
-            "error": phd_check.extraction_error,
-            "pageCount": phd_check.page_count,
-            "extractedTextLength": phd_check.extracted_text_length,
-            "updatedAt": phd_check.updated_at.isoformat() if phd_check.updated_at else None,
-            "vaultDocument": profile_doc_info(phd_check.vault_document),
-        },
-        status=200,
-    )
-
 # Handle Form Submission
 def process_publication(publication):
     if publication.get("type") == "journal":
@@ -1603,6 +1634,38 @@ def handle_form_submission(request):
             publications_json = form_data.get("publications", "[]")
             publications = json.loads(publications_json)
 
+            def parse_keywords(value):
+                if value is None:
+                    return []
+                if isinstance(value, list):
+                    items = [str(item).strip() for item in value if str(item).strip()]
+                elif isinstance(value, str):
+                    if value.strip() == "":
+                        items = []
+                    else:
+                        try:
+                            parsed = json.loads(value)
+                            if isinstance(parsed, list):
+                                items = [str(item).strip() for item in parsed if str(item).strip()]
+                            else:
+                                items = [value.strip()]
+                        except json.JSONDecodeError:
+                            items = [value.strip()]
+                if not isinstance(value, (list, str)):
+                    items = [str(value).strip()] if str(value).strip() else []
+                deduped = []
+                seen = set()
+                for item in items:
+                    key = item.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(item)
+                return deduped
+
+            def count_words(text):
+                return len([word for word in str(text or "").split() if word.strip()])
+
             def normalize_authors(value):
                 if isinstance(value, list):
                     return ", ".join([str(author).strip() for author in value if str(author).strip()])
@@ -1643,6 +1706,50 @@ def handle_form_submission(request):
             application.phd_title = form_data.get("phdTitle")
             application.phd_acquisition_date = form_data.get("phdAcquisitionDate")
             application.phd_is_from_foreign_institute = form_data.get("phdIsFromForeignInstitute") == "true"
+            application.phd_abstract = (form_data.get("phdAbstract") or "").strip()
+            application.phd_keywords = parse_keywords(form_data.get("phdKeywords"))
+
+            if not application.phd_abstract:
+                return JsonResponse({"error": "Το πεδίο περίληψης είναι υποχρεωτικό."}, status=400)
+            abstract_word_count = count_words(application.phd_abstract)
+            if abstract_word_count < PHD_ABSTRACT_MIN_WORDS:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"Η περίληψη πρέπει να έχει τουλάχιστον {PHD_ABSTRACT_MIN_WORDS} λέξεις."
+                        )
+                    },
+                    status=400,
+                )
+            if abstract_word_count > PHD_ABSTRACT_MAX_WORDS:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"Η περίληψη δεν μπορεί να ξεπερνά τις {PHD_ABSTRACT_MAX_WORDS} λέξεις."
+                        )
+                    },
+                    status=400,
+                )
+            if not application.phd_keywords:
+                return JsonResponse({"error": "Οι λέξεις-κλειδιά είναι υποχρεωτικές."}, status=400)
+            if len(application.phd_keywords) < PHD_KEYWORDS_MIN:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"Οι λέξεις-κλειδιά πρέπει να είναι τουλάχιστον {PHD_KEYWORDS_MIN}."
+                        )
+                    },
+                    status=400,
+                )
+            if len(application.phd_keywords) > PHD_KEYWORDS_MAX:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"Οι λέξεις-κλειδιά δεν μπορούν να είναι πάνω από {PHD_KEYWORDS_MAX}."
+                        )
+                    },
+                    status=400,
+                )
 
             phd_degree_id = form_data.get("phdDegreeId")
 
@@ -1736,6 +1843,11 @@ def handle_form_submission(request):
                 elif doc_type == "doatap":
                     doatap_vault_doc = selected_doc
 
+            if not phd_vault_doc:
+                return JsonResponse({"error": "Το διδακτορικό έγγραφο είναι υποχρεωτικό."}, status=400)
+            if application.phd_is_from_foreign_institute and not doatap_vault_doc:
+                return JsonResponse({"error": "Το έγγραφο ΔΟΑΤΑΠ είναι υποχρεωτικό."}, status=400)
+
             degree = None
             if phd_degree_id not in {None, "", "null", "None"}:
                 try:
@@ -1762,6 +1874,8 @@ def handle_form_submission(request):
                 degree.title = application.phd_title or ""
                 degree.acquired_at = application.phd_acquisition_date
                 degree.is_foreign_institute = application.phd_is_from_foreign_institute
+                degree.abstract = application.phd_abstract or ""
+                degree.keywords = application.phd_keywords or []
                 if phd_vault_doc:
                     degree.vault_document = phd_vault_doc
                 if degree.is_foreign_institute:
@@ -1774,20 +1888,74 @@ def handle_form_submission(request):
 
             application.save()
 
-            if phd_vault_doc:
-                phd_document, _ = PhdDocument.objects.get_or_create(
-                    application=application,
-                )
-                phd_document.thesis_title = application.phd_title or ""
-                phd_document.pdf_file = phd_vault_doc.file
-                phd_document.original_filename = os.path.basename(
-                    phd_vault_doc.file.name or ""
-                )
-                phd_document.extraction_status = "pending"
-                phd_document.extraction_error = None
-                phd_document.save()
+            if degree and application.phd_title and application.phd_abstract:
+                translation_model = "gpt-4.1"
+                embedding_model = "text-embedding-3-small"
+                detect_text = "\n".join(
+                    [
+                        application.phd_title or "",
+                        application.phd_abstract or "",
+                        ", ".join(application.phd_keywords or []),
+                    ]
+                ).strip()
+                detected_language = detect_language(detect_text, translation_model)
 
-                enqueue_phd_pdf(phd_document.id)
+                if detected_language == "en":
+                    abstract_en = application.phd_abstract
+                    keywords_en = application.phd_keywords or []
+                    title_en = application.phd_title or ""
+                    profile_text_en = build_phd_profile_text(
+                        title_en,
+                        abstract_en,
+                        keywords_en,
+                        "en",
+                    )
+                    title_gr = translate_text(application.phd_title, "gr", translation_model) or application.phd_title
+                    abstract_gr = translate_text(abstract_en, "gr", translation_model) or abstract_en
+                    keywords_gr = translate_keywords(keywords_en, "gr", translation_model) or keywords_en
+                    profile_text_gr = build_phd_profile_text(
+                        title_gr,
+                        abstract_gr,
+                        keywords_gr,
+                        "gr",
+                    )
+                else:
+                    abstract_gr = application.phd_abstract
+                    keywords_gr = application.phd_keywords or []
+                    title_gr = application.phd_title or ""
+                    profile_text_gr = build_phd_profile_text(
+                        title_gr,
+                        abstract_gr,
+                        keywords_gr,
+                        "gr",
+                    )
+                    title_en = translate_text(application.phd_title, "en", translation_model) or application.phd_title
+                    abstract_en = translate_text(abstract_gr, "en", translation_model) or abstract_gr
+                    keywords_en = translate_keywords(keywords_gr, "en", translation_model) or keywords_gr
+                    profile_text_en = build_phd_profile_text(
+                        title_en,
+                        abstract_en,
+                        keywords_en,
+                        "en",
+                    )
+
+                phd_profile, _ = PhdProfile.objects.get_or_create(phd_degree=degree)
+                phd_profile.title = title_gr
+                phd_profile.abstract = abstract_gr
+                phd_profile.keywords = keywords_gr
+                phd_profile.profile_text = profile_text_gr
+                phd_profile.title_en = title_en
+                phd_profile.abstract_en = abstract_en
+                phd_profile.keywords_en = keywords_en
+                phd_profile.profile_text_en = profile_text_en
+                phd_profile.save()
+
+                upsert_phd_embeddings(
+                    degree,
+                    profile_text_gr,
+                    profile_text_en,
+                    embedding_model,
+                )
 
             def handle_multi_docs(field_key, doc_type, keep_ids_key=None):
                 new_files = request.FILES.getlist(field_key)
@@ -2080,6 +2248,8 @@ def get_applicant_score(request, application_id):
         "email": user.email,
         "phdTitle": application.phd_title,
         "phdAcquisitionDate": application.phd_acquisition_date.strftime("%d-%m-%Y") if application.phd_acquisition_date else "",
+        "phdAbstract": application.phd_abstract or "",
+        "phdKeywords": application.phd_keywords or [],
         "scientificField": sf.name if sf else "",
         "school": get_school_of_department(sf.department) if sf else "",
         "department": sf.department if sf else "",
