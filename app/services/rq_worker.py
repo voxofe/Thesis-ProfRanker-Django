@@ -15,7 +15,8 @@ def main():
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
     redis_conn = Redis.from_url(redis_url)
 
-    queue = Queue("phd-pdf", connection=redis_conn)
+    queue_name = os.getenv("RQ_QUEUE_NAME", "phd-pdf").strip() or "phd-pdf"
+    queue = Queue(queue_name, connection=redis_conn)
     # SimpleWorker avoids os.fork, which is not available on Windows.
     worker = SimpleWorker([queue], connection=redis_conn)
     worker.work()

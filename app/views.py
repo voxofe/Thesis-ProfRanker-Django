@@ -6,6 +6,8 @@ from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from .serializers import ApplicationSerializer
 from .services.sjr import get_sjr_quartile
+from .services.rq_queue import enqueue_job
+from .services.cron_jobs import process_position_closed_emails, send_position_closed_emails_job
 from .utils.calculate import calculate_points
 from .utils.email_utils import (
     build_email_html,
@@ -34,6 +36,7 @@ from .models import (
 )
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
+from django.core.cache import cache
 from django.conf import settings
 from django.core.files.base import File
 from openai import OpenAI
@@ -57,6 +60,27 @@ PHD_KEYWORDS_MIN = 3
 PHD_KEYWORDS_MAX = 10
 
 logger = logging.getLogger(__name__)
+
+SUBMISSION_PROGRESS_TTL_SECONDS = 15 * 60
+
+
+def submission_progress_key(submission_id):
+    return f"submission_progress:{submission_id}"
+
+
+def set_submission_progress(submission_id, user_id, percent, label, detail=None, done=False, error=None):
+    if not submission_id:
+        return
+    payload = {
+        "userId": user_id,
+        "percent": int(percent),
+        "label": label,
+        "detail": detail,
+        "done": bool(done),
+        "error": error,
+        "updatedAt": timezone.now().isoformat(),
+    }
+    cache.set(submission_progress_key(submission_id), payload, SUBMISSION_PROGRESS_TTL_SECONDS)
 
 
 def is_position_active(position, now=None):
@@ -830,59 +854,15 @@ def cron_send_position_closed_emails(request):
     if not secret or secret != settings.CRON_SECRET:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    tz = ZoneInfo("Europe/Athens")
-    now = timezone.now().astimezone(tz)
+    try:
+        job = enqueue_job(send_position_closed_emails_job)
+    except Exception as exc:
+        print(f"RQ enqueue failed: {exc}")
+        result = process_position_closed_emails()
+        result["mode"] = "sync-fallback"
+        return JsonResponse(result, status=200)
 
-    positions = (
-        Position.objects.filter(end_date__lte=now.date(), closed_notified_at__isnull=True)
-        .select_related("scientific_field")
-        .order_by("end_date", "end_time", "id")
-    )
-
-    sent_positions = 0
-    sent_emails = 0
-    skipped_positions = 0
-
-    def chunked(items, size):
-        for i in range(0, len(items), size):
-            yield items[i : i + size]
-
-    for position in positions:
-        end_time = position.end_time or dt_time(23, 59)
-        end_dt = datetime.combine(position.end_date, end_time, tzinfo=tz)
-        if end_dt > now:
-            skipped_positions += 1
-            continue
-
-        applicants = (
-            Application.objects.filter(position=position)
-            .select_related("user")
-        )
-        emails = sorted({app.user.email for app in applicants if app.user and app.user.email})
-        if emails:
-            context = {
-                "scientific_field": position.scientific_field.name,
-            }
-            try:
-                for batch in chunked(emails, 100):
-                    send_template_batch_email("position_closed", batch, context)
-                    sent_emails += len(batch)
-            except Exception as exc:
-                print(f"Position closed email failed ({position.id}): {exc}")
-                continue
-
-        position.closed_notified_at = timezone.now()
-        position.save(update_fields=["closed_notified_at"])
-        sent_positions += 1
-
-    return JsonResponse(
-        {
-            "positions_processed": sent_positions,
-            "positions_skipped": skipped_positions,
-            "emails_sent": sent_emails,
-        },
-        status=200,
-    )
+    return JsonResponse({"job_id": job.id, "status": "queued"}, status=202)
 
 # Get User by Token
 @api_view(["GET"])
@@ -1631,6 +1611,8 @@ def handle_form_submission(request):
         start_time = time.time()
         try:
             form_data = request.data
+            submission_id = form_data.get("submissionId")
+            set_submission_progress(submission_id, user_id, 5, "Έλεγχος στοιχείων")
             publications_json = form_data.get("publications", "[]")
             publications = json.loads(publications_json)
 
@@ -1692,6 +1674,7 @@ def handle_form_submission(request):
                 user=user,
                 position=position,
             )
+            set_submission_progress(submission_id, user_id, 15, "Αποθήκευση στοιχείων αίτησης")
             previous_snapshot = None
             if not created:
                 previous_snapshot = build_application_snapshot(application)
@@ -1770,6 +1753,8 @@ def handle_form_submission(request):
             profile.has_not_participated_in_past_program = application.has_not_participated_in_past_program
             profile.work_experience = application.work_experience
             profile.save()
+
+            set_submission_progress(submission_id, user_id, 30, "Επεξεργασία εγγράφων")
 
             def handle_profile_doc_upload(field_key, doc_type):
                 new_file = request.FILES.get(field_key)
@@ -1862,6 +1847,17 @@ def handle_form_submission(request):
                     id=application.phd_degree_id, user=user
                 ).first()
 
+            if degree is None and application.phd_title and application.phd_acquisition_date:
+                degree = (
+                    PhdDegree.objects.filter(
+                        user=user,
+                        title=application.phd_title,
+                        acquired_at=application.phd_acquisition_date,
+                    )
+                    .order_by("-updated_at", "-id")
+                    .first()
+                )
+
             if (
                 degree is None
                 and application.phd_title
@@ -1889,6 +1885,7 @@ def handle_form_submission(request):
             application.save()
 
             if degree and application.phd_title and application.phd_abstract:
+                set_submission_progress(submission_id, user_id, 45, "Επεξεργασία διδακτορικού")
                 translation_model = "gpt-4.1"
                 embedding_model = "text-embedding-3-small"
                 detect_text = "\n".join(
@@ -2017,6 +2014,8 @@ def handle_form_submission(request):
                 keep_ids_key="employmentCertificateDocumentIds",
             )
 
+            set_submission_progress(submission_id, user_id, 60, "Επεξεργασία δημοσιεύσεων (SJR)")
+
             # --- Publications resubmission logic ---
             # Build a dict of existing publications for quick lookup
             existing_publications = {publication.id: publication for publication in application.publications.all()}
@@ -2026,10 +2025,22 @@ def handle_form_submission(request):
             sjr_results = []
             with ThreadPoolExecutor(max_workers=4) as executor: 
                 future_to_publication = {executor.submit(process_publication, publication): publication for publication in publications}
+                total_publications = len(future_to_publication)
+                completed_publications = 0
 
                 for future in future_to_publication:
                     publication = future_to_publication[future]
                     sjr_data = future.result()
+                    completed_publications += 1
+                    if total_publications:
+                        percent = 60 + int((completed_publications / total_publications) * 20)
+                        set_submission_progress(
+                            submission_id,
+                            user_id,
+                            percent,
+                            "Επεξεργασία δημοσιεύσεων (SJR)",
+                            detail=f"{completed_publications}/{total_publications}",
+                        )
 
                     notFound = ""
                     sjr_results.append({
@@ -2131,12 +2142,14 @@ def handle_form_submission(request):
             publications_qs = Publication.objects.filter(application=application)
 
             # Now calculate points AFTER publications are processed
+            set_submission_progress(submission_id, user_id, 85, "Υπολογισμός μορίων")
             calculated_points = calculate_points(application, publications_qs)
             
             # Update the Application instance with the calculated points
             Application.objects.filter(id=application.id).update(**calculated_points)
 
             if created:
+                set_submission_progress(submission_id, user_id, 95, "Αποστολή ειδοποίησης")
                 submission_context = {
                     "scientific_field": position.scientific_field.name,
                     "end_date": position.end_date.strftime("%d-%m-%Y"),
@@ -2157,6 +2170,7 @@ def handle_form_submission(request):
                     current_snapshot,
                 )
                 if changed:
+                    set_submission_progress(submission_id, user_id, 95, "Αποστολή ειδοποίησης")
                     resubmission_context = {
                         "scientific_field": position.scientific_field.name,
                         "end_date": position.end_date.strftime("%d-%m-%Y"),
@@ -2178,6 +2192,8 @@ def handle_form_submission(request):
             execution_time = end_time - start_time
             print(f"⏱️ Total execution time: {execution_time:.4f} seconds\n")
 
+            set_submission_progress(submission_id, user_id, 100, "Ολοκληρώθηκε", done=True)
+
             return JsonResponse({
                 'message': 'Success',
                 # 'sjr_results': sjr_results,
@@ -2185,9 +2201,50 @@ def handle_form_submission(request):
             }, status=200)
 
         except Exception as e:
+            set_submission_progress(submission_id, user_id, 100, "Αποτυχία", done=True, error=str(e))
             return JsonResponse({'error': str(e)}, status=400)
 
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
+
+@api_view(["GET"])
+def get_submit_progress(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+    user_id = payload.get("user_id")
+
+    submission_id = request.GET.get("submissionId")
+    if not submission_id:
+        return JsonResponse({"error": "submissionId is required."}, status=400)
+
+    debug = request.GET.get("debug") in {"1", "true", "True"}
+
+    cached = cache.get(submission_progress_key(submission_id))
+    if not cached:
+        response = {"percent": 0, "label": "Σε αναμονή", "done": False}
+        if debug:
+            response["debug"] = {
+                "submissionId": submission_id,
+                "cachePresent": False,
+            }
+        return JsonResponse(response, status=200)
+    if cached.get("userId") != user_id:
+        return JsonResponse({"error": "Not found."}, status=404)
+
+    response = {k: v for k, v in cached.items() if k != "userId"}
+    if debug:
+        response["debug"] = {
+            "submissionId": submission_id,
+            "cachePresent": True,
+            "cachePayload": response,
+        }
+    return JsonResponse(response, status=200)
 
 # Get Applicant Score
 @api_view(["GET"])

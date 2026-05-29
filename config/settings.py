@@ -173,3 +173,10 @@ RESEND_EMAIL_FOOTER = os.getenv(
 
 CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": os.path.join(BASE_DIR, "cache"),
+    }
+}
+
