@@ -1,6 +1,7 @@
 import re
 import logging
 from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from app.models import PhdCheck, PhdDocument
 
 MIN_PHD_PDF_PAGES = 10
@@ -24,6 +25,26 @@ def _count_non_whitespace(text):
 def _extract_phd_pdf(file_handle, log_id=None):
     try:
         reader = PdfReader(file_handle)
+        if getattr(reader, "is_encrypted", False):
+            try:
+                if reader.decrypt("") == 0:
+                    logger.warning("PhD PDF processing failed: encrypted PDF (id=%s)", log_id)
+                    return {
+                        "status": "failed",
+                        "error": "Το PDF είναι προστατευμένο με κωδικό και δεν μπορεί να ελεγχθεί.",
+                        "page_count": None,
+                        "text": "",
+                        "text_length": 0,
+                    }
+            except Exception:
+                logger.exception("PhD PDF processing failed: encrypted PDF (id=%s)", log_id)
+                return {
+                    "status": "failed",
+                    "error": "Το PDF είναι προστατευμένο με κωδικό και δεν μπορεί να ελεγχθεί.",
+                    "page_count": None,
+                    "text": "",
+                    "text_length": 0,
+                }
         page_count = len(reader.pages)
         if page_count == 0:
             logger.warning("PhD PDF processing failed: empty PDF (id=%s)", log_id)
@@ -65,8 +86,8 @@ def _extract_phd_pdf(file_handle, log_id=None):
             return {
                 "status": "failed",
                 "error": (
-                    "Το ανεβασμένο PDF διδακτορικής διατριβής δεν περιέχει αρκετό εξαγώγιμο κείμενο. "
-                    "Παρακαλώ ανεβάστε PDF με αναγνώσιμο κείμενο."
+                    "Το ανεβασμένο PDF διδακτορικής διατριβής δεν περιέχει εξαγώγιμο κείμενο. "
+                    "Αν πρόκειται για σκαναρισμένες εικόνες, ανεβάστε PDF με αναγνώσιμο κείμενο."
                 ),
                 "page_count": page_count,
                 "text": normalized,
@@ -100,6 +121,15 @@ def _extract_phd_pdf(file_handle, log_id=None):
         return {
             "status": "failed",
             "error": "Το PDF είναι κενό ή δεν μπορεί να αναγνωστεί.",
+            "page_count": None,
+            "text": "",
+            "text_length": 0,
+        }
+    except PdfReadError:
+        logger.exception("PhD PDF processing failed with PdfReadError (id=%s)", log_id)
+        return {
+            "status": "failed",
+            "error": "Το PDF δεν μπορεί να αναγνωστεί. Ενδέχεται να είναι κατεστραμμένο.",
             "page_count": None,
             "text": "",
             "text_length": 0,
