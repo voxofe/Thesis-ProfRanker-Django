@@ -31,3 +31,4 @@ journal_data.csv
 
 .env
 
+/cache

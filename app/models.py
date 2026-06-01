@@ -139,6 +139,10 @@ class PhdDegree(models.Model):
 
 
 class PhdProfile(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
     phd_degree = models.OneToOneField(
         PhdDegree,
         on_delete=models.CASCADE,
@@ -152,6 +156,12 @@ class PhdProfile(models.Model):
     abstract_en = models.TextField(blank=True, null=True)
     keywords_en = models.JSONField(default=list, blank=True, null=True)
     profile_text_en = models.TextField(blank=True, null=True)
+    original_language = models.CharField(
+        max_length=2,
+        choices=LANGUAGE_CHOICES,
+        blank=True,
+        null=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -308,6 +318,7 @@ class Application(models.Model):
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)
+    phd_cosine_similarity = models.FloatField(blank=True, null=True)
     publication_points = models.IntegerField(default=0, blank=True, null=True)
     work_experience_points = models.IntegerField(default=0, blank=True, null=True)
     not_past_program_points = models.IntegerField(default=0, blank=True, null=True)

@@ -6,7 +6,7 @@ from rq import Queue
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_QUEUE_NAME = os.getenv("RQ_QUEUE_NAME", "phd-pdf").strip() or "phd-pdf"
+DEFAULT_QUEUE_NAME = os.getenv("RQ_QUEUE_NAME", "background").strip() or "background"
 
 
 def get_redis_connection():
