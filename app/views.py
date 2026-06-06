@@ -42,6 +42,7 @@ from .models import (
     PhdDegree,
     PhdProfile,
     PhdEmbedding,
+    CoursePlan,
 )
 from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
@@ -141,21 +142,32 @@ PROFILE_DOC_FIELD_MAP = {
     "responsibleDeclarationDocument": "responsible_declaration",
 }
 
+COURSE_PLAN_FIELDS_MAP = {
+    "generalDescription": "general_description",
+    "learningObjectives": "learning_objectives",
+    "courseSchedule": "course_schedule",
+    "deliveryMethods": "delivery_methods",
+    "bibliographyMaterial": "bibliography_material",
+    "learningOutcomes": "learning_outcomes",
+    "assessmentMethodsCriteria": "assessment_methods_criteria",
+}
+
 
 def profile_doc_info(doc):
     if not doc:
         return {"id": None, "name": None, "downloadPath": None, "isDefault": False}
-    is_used = ApplicationDocument.objects.filter(vault_document=doc).exists()
-    if not is_used:
-        is_used = PhdDegree.objects.filter(
-            models.Q(vault_document=doc) | models.Q(doatap_document=doc)
-        ).exists()
+    is_used_in_application = ApplicationDocument.objects.filter(vault_document=doc).exists()
+    is_used_in_degree = PhdDegree.objects.filter(
+        models.Q(vault_document=doc) | models.Q(doatap_document=doc)
+    ).exists()
     return {
         "id": doc.id,
         "name": os.path.basename(doc.file.name) if doc.file else None,
         "downloadPath": f"/api/profile/documents/{doc.id}",
         "isDefault": doc.is_default,
-        "isUsed": is_used,
+        "isUsed": is_used_in_application,
+        "isUsedInApplication": is_used_in_application,
+        "isUsedInPhdDegree": is_used_in_degree,
         "uploadedAt": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
     }
 
@@ -280,6 +292,19 @@ def build_application_form(app):
             return multi_docs.get(doc_type, [])
         return []
 
+    existing_course_plans = {
+        str(course_plan.course_id): {
+            "generalDescription": course_plan.general_description or "",
+            "learningObjectives": course_plan.learning_objectives or "",
+            "courseSchedule": course_plan.course_schedule or "",
+            "deliveryMethods": course_plan.delivery_methods or "",
+            "bibliographyMaterial": course_plan.bibliography_material or "",
+            "learningOutcomes": course_plan.learning_outcomes or "",
+            "assessmentMethodsCriteria": course_plan.assessment_methods_criteria or "",
+        }
+        for course_plan in CoursePlan.objects.filter(application=app)
+    }
+
     return {
         "id": app.id,
         "positionId": app.position.id if app.position else None,
@@ -344,6 +369,7 @@ def build_application_form(app):
             }
             for publication in app.publications.all()
         ],
+        "coursePlans": existing_course_plans,
         "positionEndDate": app.position.end_date if app.position else None,
         "positionStartDate": app.position.start_date if app.position else None,
     }
@@ -1170,16 +1196,6 @@ def profile_document_manage(request, doc_id):
             },
             status=400,
         )
-    if PhdDegree.objects.filter(
-        models.Q(vault_document=profile_doc) | models.Q(doatap_document=profile_doc)
-    ).exists():
-        return JsonResponse(
-            {
-                "error": "Το δικαιολογητικό χρησιμοποιείται σε διδακτορικό και δεν μπορεί να τροποποιηθεί.",
-            },
-            status=400,
-        )
-
     if request.method == "PUT":
         new_file = request.FILES.get("file")
         validation_error = validate_vault_file(new_file, doc_type=profile_doc.doc_type)
@@ -1197,6 +1213,21 @@ def profile_document_manage(request, doc_id):
     if request.method == "DELETE":
         doc_type = profile_doc.doc_type
         was_default = profile_doc.is_default
+        degrees = list(
+            PhdDegree.objects.filter(
+                models.Q(vault_document=profile_doc) | models.Q(doatap_document=profile_doc)
+            )
+        )
+        for degree in degrees:
+            update_fields = []
+            if degree.vault_document_id == profile_doc.id:
+                degree.vault_document = None
+                update_fields.append("vault_document")
+            if degree.doatap_document_id == profile_doc.id:
+                degree.doatap_document = None
+                update_fields.append("doatap_document")
+            if update_fields:
+                degree.save(update_fields=update_fields)
         if profile_doc.file:
             profile_doc.file.delete(save=False)
         profile_doc.delete()
@@ -1353,6 +1384,23 @@ def handle_form_submission(request):
             set_submission_progress(submission_id, user_id, 5, "Έλεγχος στοιχείων")
             publications_json = form_data.get("publications", "[]")
             publications = json.loads(publications_json)
+            course_plans_json = form_data.get("coursePlans", "{}")
+            try:
+                course_plans_payload = (
+                    json.loads(course_plans_json)
+                    if isinstance(course_plans_json, str)
+                    else course_plans_json
+                )
+            except json.JSONDecodeError:
+                return JsonResponse(
+                    {"error": "Τα στοιχεία σχεδιαγράμματος μαθημάτων δεν είναι έγκυρα."},
+                    status=400,
+                )
+            if not isinstance(course_plans_payload, dict):
+                return JsonResponse(
+                    {"error": "Τα στοιχεία σχεδιαγράμματος μαθημάτων δεν είναι έγκυρα."},
+                    status=400,
+                )
 
             def parse_keywords(value):
                 if value is None:
@@ -1406,6 +1454,42 @@ def handle_form_submission(request):
 
             if not is_position_active(position):
                 return JsonResponse({"error": "Η θέση δεν είναι ενεργή για υποβολή/επανυποβολή."}, status=400)
+
+            position_courses = list(position.scientific_field.courses.all())
+            if not position_courses:
+                return JsonResponse(
+                    {"error": "Δεν βρέθηκαν μαθήματα για την επιλεγμένη θέση."},
+                    status=400,
+                )
+
+            normalized_course_plans = {}
+            for course in position_courses:
+                plan_payload = course_plans_payload.get(str(course.id))
+                if not isinstance(plan_payload, dict):
+                    return JsonResponse(
+                        {
+                            "error": (
+                                f"Συμπληρώστε όλα τα πεδία σχεδιαγράμματος για το μάθημα \"{course.name}\"."
+                            )
+                        },
+                        status=400,
+                    )
+
+                normalized_plan = {}
+                for api_field, db_field in COURSE_PLAN_FIELDS_MAP.items():
+                    value = (plan_payload.get(api_field) or "").strip()
+                    if not value:
+                        return JsonResponse(
+                            {
+                                "error": (
+                                    f"Το πεδίο \"{api_field}\" είναι υποχρεωτικό για το μάθημα \"{course.name}\"."
+                                )
+                            },
+                            status=400,
+                        )
+                    normalized_plan[db_field] = value
+
+                normalized_course_plans[course.id] = normalized_plan
 
             # --- Get or create Application ---
             application, created = Application.objects.get_or_create(
@@ -1572,40 +1656,39 @@ def handle_form_submission(request):
                 return JsonResponse({"error": "Το έγγραφο ΔΟΑΤΑΠ είναι υποχρεωτικό."}, status=400)
 
             degree = None
+            linked_degree = None
             if phd_degree_id not in {None, "", "null", "None"}:
                 try:
-                    degree = PhdDegree.objects.filter(
+                    linked_degree = PhdDegree.objects.filter(
                         id=int(phd_degree_id), user=user
                     ).first()
                 except (TypeError, ValueError):
-                    degree = None
+                    linked_degree = None
 
-            if degree is None and application.phd_degree_id:
-                degree = PhdDegree.objects.filter(
+            if linked_degree is None and application.phd_degree_id:
+                linked_degree = PhdDegree.objects.filter(
                     id=application.phd_degree_id, user=user
                 ).first()
 
-            if degree is None and application.phd_title and application.phd_acquisition_date:
-                degree = (
-                    PhdDegree.objects.filter(
-                        user=user,
-                        title=application.phd_title,
-                        acquired_at=application.phd_acquisition_date,
-                    )
-                    .order_by("-updated_at", "-id")
-                    .first()
-                )
-
-            if (
-                degree is None
-                and application.phd_title
-                and application.phd_acquisition_date
-                and phd_vault_doc
-            ):
+            degree = linked_degree
+            title_value = (application.phd_title or "").strip()
+            phd_doc_id = phd_vault_doc.id if phd_vault_doc else None
+            base_degree = degree
+            title_changed = False
+            file_changed = False
+            create_new = False
+            if degree:
+                title_changed = title_value != (degree.title or "")
+                file_changed = phd_doc_id != degree.vault_document_id
+                if title_changed and file_changed:
+                    degree = PhdDegree(user=user)
+                    create_new = True
+            elif title_value and application.phd_acquisition_date and phd_vault_doc:
                 degree = PhdDegree(user=user)
+                create_new = True
 
             if degree:
-                degree.title = application.phd_title or ""
+                degree.title = title_value
                 degree.acquired_at = application.phd_acquisition_date
                 degree.is_foreign_institute = application.phd_is_from_foreign_institute
                 degree.abstract = application.phd_abstract or ""
@@ -1621,6 +1704,28 @@ def handle_form_submission(request):
                 application.phd_degree = degree
 
             application.save()
+
+            existing_course_plans = {
+                plan.course_id: plan
+                for plan in CoursePlan.objects.filter(
+                    application=application,
+                    course_id__in=[course.id for course in position_courses],
+                )
+            }
+
+            for course in position_courses:
+                course_plan = existing_course_plans.get(course.id)
+                if not course_plan:
+                    course_plan = CoursePlan(application=application, course=course)
+
+                for field_name, field_value in normalized_course_plans[course.id].items():
+                    setattr(course_plan, field_name, field_value)
+
+                course_plan.save()
+
+            CoursePlan.objects.filter(application=application).exclude(
+                course_id__in=[course.id for course in position_courses]
+            ).delete()
 
             if degree and application.phd_title and application.phd_abstract:
                 set_submission_progress(submission_id, user_id, 45, "Επεξεργασία διδακτορικού")
@@ -1950,6 +2055,18 @@ def get_applicant_score(request, application_id):
         return JsonResponse({"error": "Forbidden."}, status=403)
     user = application.user
     sf = application.position.scientific_field if application.position else None
+    course_plans = {
+        str(course_plan.course_id): {
+            "generalDescription": course_plan.general_description or "",
+            "learningObjectives": course_plan.learning_objectives or "",
+            "courseSchedule": course_plan.course_schedule or "",
+            "deliveryMethods": course_plan.delivery_methods or "",
+            "bibliographyMaterial": course_plan.bibliography_material or "",
+            "learningOutcomes": course_plan.learning_outcomes or "",
+            "assessmentMethodsCriteria": course_plan.assessment_methods_criteria or "",
+        }
+        for course_plan in CoursePlan.objects.filter(application=application)
+    }
 
     def file_info(file_field, key):
         if not file_field:
@@ -2045,6 +2162,7 @@ def get_applicant_score(request, application_id):
             ),
             "responsibleDeclaration": linked_doc_info("responsible_declaration"),
         },
+        "coursePlans": course_plans,
     }
     return JsonResponse(data, safe=False)
 

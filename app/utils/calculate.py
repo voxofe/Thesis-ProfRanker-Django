@@ -103,8 +103,8 @@ def calculate_thesis_relevance_points(application):
     if similarity is None:
         return 0, None
 
-    min_useful = 0.45
-    max_useful = 0.85
+    min_useful = 0.47
+    max_useful = 0.82
     normalized = (similarity - min_useful) / (max_useful - min_useful)
     normalized = max(0.0, min(1.0, normalized))
 

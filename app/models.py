@@ -355,3 +355,34 @@ class Publication(models.Model):
     def __str__(self):
         return f"{self.publication_title} ({self.year})"
 
+
+class CoursePlan(models.Model):
+    application = models.ForeignKey(
+        Application,
+        on_delete=models.CASCADE,
+        related_name="course_plans",
+    )
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name="course_plans",
+    )
+    general_description = models.TextField()
+    learning_objectives = models.TextField()
+    course_schedule = models.TextField()
+    delivery_methods = models.TextField()
+    bibliography_material = models.TextField()
+    learning_outcomes = models.TextField()
+    assessment_methods_criteria = models.TextField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["application", "course"],
+                name="unique_course_plan_per_application_course",
+            )
+        ]
+
+    def __str__(self):
+        return f"Course Plan - Application {self.application_id} - Course {self.course_id}"
+
