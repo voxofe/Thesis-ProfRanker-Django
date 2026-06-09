@@ -10,6 +10,7 @@ from .services.rq_queue import enqueue_job
 from .services.cron_jobs import process_position_closed_emails, send_position_closed_emails_job
 from .services.ai_tasks import (
     normalize_source_text,
+    process_course_plan_ai_job,
     process_phd_ai_job,
     process_scientific_field_ai_job,
 )
@@ -1381,7 +1382,7 @@ def handle_form_submission(request):
         try:
             form_data = request.data
             submission_id = form_data.get("submissionId")
-            set_submission_progress(submission_id, user_id, 5, "Έλεγχος στοιχείων")
+            set_submission_progress(submission_id, user_id, 15, "Έλεγχος στοιχείων")
             publications_json = form_data.get("publications", "[]")
             publications = json.loads(publications_json)
             course_plans_json = form_data.get("coursePlans", "{}")
@@ -1496,7 +1497,7 @@ def handle_form_submission(request):
                 user=user,
                 position=position,
             )
-            set_submission_progress(submission_id, user_id, 15, "Αποθήκευση στοιχείων αίτησης")
+            set_submission_progress(submission_id, user_id, 35, "Αποθήκευση στοιχείων αίτησης")
             previous_snapshot = None
             if not created:
                 previous_snapshot = build_application_snapshot(application)
@@ -1576,7 +1577,7 @@ def handle_form_submission(request):
             profile.work_experience = application.work_experience
             profile.save()
 
-            set_submission_progress(submission_id, user_id, 30, "Επεξεργασία εγγράφων")
+            set_submission_progress(submission_id, user_id, 55, "Επεξεργασία εγγράφων")
 
             def handle_profile_doc_upload(field_key, doc_type):
                 new_file = request.FILES.get(field_key)
@@ -1727,14 +1728,29 @@ def handle_form_submission(request):
                 course_id__in=[course.id for course in position_courses]
             ).delete()
 
+            relevance_progress_label = "Αξιολόγηση συνάφειας αίτησης με επιστημονικό πεδίο"
+            ai_jobs = []
             if degree and application.phd_title and application.phd_abstract:
-                set_submission_progress(submission_id, user_id, 45, "Επεξεργασία διδακτορικού")
-                process_phd_ai_job(
-                    application.id,
-                    submission_id,
-                    user_id,
-                    "Επεξεργασία διδακτορικού",
+                ai_jobs.append(
+                    (
+                        process_phd_ai_job,
+                        (application.id, submission_id, user_id, relevance_progress_label),
+                    )
                 )
+
+            ai_jobs.append(
+                (
+                    process_course_plan_ai_job,
+                    (application.id, submission_id, user_id, relevance_progress_label),
+                )
+            )
+
+            if ai_jobs:
+                set_submission_progress(submission_id, user_id, 68, relevance_progress_label)
+                with ThreadPoolExecutor(max_workers=min(2, len(ai_jobs))) as executor:
+                    futures = [executor.submit(job_func, *job_args) for job_func, job_args in ai_jobs]
+                    for future in futures:
+                        future.result()
 
             def handle_multi_docs(field_key, doc_type, keep_ids_key=None):
                 new_files = request.FILES.getlist(field_key)
@@ -1796,7 +1812,7 @@ def handle_form_submission(request):
                 keep_ids_key="employmentCertificateDocumentIds",
             )
 
-            set_submission_progress(submission_id, user_id, 60, "Επεξεργασία δημοσιεύσεων (SJR)")
+            set_submission_progress(submission_id, user_id, 86, "Επεξεργασία δημοσιεύσεων (SJR)")
 
             # --- Publications resubmission logic ---
             # Build a dict of existing publications for quick lookup
@@ -1815,7 +1831,7 @@ def handle_form_submission(request):
                     sjr_data = future.result()
                     completed_publications += 1
                     if total_publications:
-                        percent = 60 + int((completed_publications / total_publications) * 20)
+                        percent = 86 + int((completed_publications / total_publications) * 10)
                         set_submission_progress(
                             submission_id,
                             user_id,
@@ -1924,14 +1940,14 @@ def handle_form_submission(request):
             publications_qs = Publication.objects.filter(application=application)
 
             # Now calculate points AFTER publications are processed
-            set_submission_progress(submission_id, user_id, 85, "Υπολογισμός μορίων")
+            set_submission_progress(submission_id, user_id, 97, "Υπολογισμός μορίων")
             calculated_points = calculate_points(application, publications_qs)
             
             # Update the Application instance with the calculated points
             Application.objects.filter(id=application.id).update(**calculated_points)
 
             if created:
-                set_submission_progress(submission_id, user_id, 95, "Αποστολή ειδοποίησης")
+                set_submission_progress(submission_id, user_id, 99, "Αποστολή ειδοποίησης")
                 submission_context = {
                     "scientific_field": position.scientific_field.name,
                     "end_date": position.end_date.strftime("%d-%m-%Y"),
@@ -1952,7 +1968,7 @@ def handle_form_submission(request):
                     current_snapshot,
                 )
                 if changed:
-                    set_submission_progress(submission_id, user_id, 95, "Αποστολή ειδοποίησης")
+                    set_submission_progress(submission_id, user_id, 99, "Αποστολή ειδοποίησης")
                     resubmission_context = {
                         "scientific_field": position.scientific_field.name,
                         "end_date": position.end_date.strftime("%d-%m-%Y"),

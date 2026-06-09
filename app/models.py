@@ -317,6 +317,7 @@ class Application(models.Model):
 
     course_plan_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     course_material_structure_points = models.IntegerField(default=0, blank=True, null=True)
+    course_plan_cosine_similarity = models.FloatField(blank=True, null=True)
     thesis_relevance_points = models.IntegerField(default=0, blank=True, null=True)
     phd_cosine_similarity = models.FloatField(blank=True, null=True)
     publication_points = models.IntegerField(default=0, blank=True, null=True)
@@ -385,4 +386,49 @@ class CoursePlan(models.Model):
 
     def __str__(self):
         return f"Course Plan - Application {self.application_id} - Course {self.course_id}"
+
+
+class CoursePlanProfile(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
+
+    application = models.OneToOneField(
+        Application,
+        on_delete=models.CASCADE,
+        related_name="course_plan_profile",
+    )
+    profile_text = models.TextField(blank=True, null=True)
+    original_language = models.CharField(
+        max_length=2,
+        choices=LANGUAGE_CHOICES,
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Course Plan Profile - Application {self.application_id}"
+
+
+class CoursePlanEmbedding(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
+
+    profile = models.ForeignKey(
+        CoursePlanProfile,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    model_name = models.CharField(max_length=255)
+    language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default="gr")
+    vector = VectorField(dimensions=1536)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Course Plan Embedding {self.id} - {self.model_name}"
 

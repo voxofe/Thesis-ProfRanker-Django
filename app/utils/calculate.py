@@ -1,7 +1,20 @@
 
 import math
 
-from app.models import PhdProfile
+from app.models import CoursePlanProfile, PhdProfile
+
+
+def cosine_similarity(vec_a, vec_b):
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for idx, value in enumerate(vec_a):
+        dot += value * vec_b[idx]
+        norm_a += value * value
+        norm_b += vec_b[idx] * vec_b[idx]
+    if norm_a == 0 or norm_b == 0:
+        return None
+    return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
 
 
 def custom_round(value):
@@ -20,8 +33,73 @@ def custom_round(value):
 
 # Criteria 1: Course plan relevance (0-25 points)
 def calculate_course_plan_relevance_points(application):
-    # Implement actual logic 
-    return 0  # Placeholder
+    position = application.position
+    if not position or not position.scientific_field_id:
+        return 0, None
+
+    try:
+        profile = application.course_plan_profile
+    except CoursePlanProfile.DoesNotExist:
+        return 0, None
+
+    preferred_language = profile.original_language or "gr"
+
+    def select_language(lang):
+        if not profile.profile_text:
+            return None
+
+        course_plan_embedding = (
+            profile.embeddings.filter(language=lang).order_by("-created_at").first()
+        )
+        if not course_plan_embedding:
+            return None
+
+        field_embedding = (
+            position.scientific_field.embeddings.filter(
+                language=lang,
+                model_name=course_plan_embedding.model_name,
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if not field_embedding:
+            return None
+
+        return {
+            "course_plan_embedding": course_plan_embedding,
+            "field_embedding": field_embedding,
+        }
+
+    selected = select_language(preferred_language)
+    if not selected:
+        fallback_language = "en" if preferred_language == "gr" else "gr"
+        selected = select_language(fallback_language)
+    if not selected:
+        return 0, None
+
+    cp_vector = selected["course_plan_embedding"].vector
+    field_vector = selected["field_embedding"].vector
+    if cp_vector is None or field_vector is None:
+        return 0, None
+
+    cp_vector = list(cp_vector)
+    field_vector = list(field_vector)
+    if len(cp_vector) != len(field_vector):
+        return 0, None
+    if any(v is None for v in cp_vector) or any(v is None for v in field_vector):
+        return 0, None
+
+    similarity = cosine_similarity(cp_vector, field_vector)
+    if similarity is None:
+        return 0, None
+
+    min_useful = 0.47
+    max_useful = 0.82
+    normalized = (similarity - min_useful) / (max_useful - min_useful)
+    normalized = max(0.0, min(1.0, normalized))
+
+    points = custom_round(normalized * 25)
+    return max(0, min(25, points)), similarity
     
 # Criteria 2: Course material structure (0-5 points)
 def calculate_course_material_structure_points(application):
@@ -87,18 +165,6 @@ def calculate_thesis_relevance_points(application):
     if any(v is None for v in phd_vector) or any(v is None for v in field_vector):
         return 0, None
 
-    def cosine_similarity(vec_a, vec_b):
-        dot = 0.0
-        norm_a = 0.0
-        norm_b = 0.0
-        for idx, value in enumerate(vec_a):
-            dot += value * vec_b[idx]
-            norm_a += value * value
-            norm_b += vec_b[idx] * vec_b[idx]
-        if norm_a == 0 or norm_b == 0:
-            return None
-        return dot / (math.sqrt(norm_a) * math.sqrt(norm_b))
-
     similarity = cosine_similarity(phd_vector, field_vector)
     if similarity is None:
         return 0, None
@@ -139,7 +205,7 @@ def calculate_work_experience_points(application):
 
     
 def calculate_points(application, publications):
-    criteria1 = calculate_course_plan_relevance_points(application)
+    criteria1, course_plan_similarity = calculate_course_plan_relevance_points(application)
     criteria2 = calculate_course_material_structure_points(application)
     criteria3, similarity = calculate_thesis_relevance_points(application)
     criteria4 = calculate_publication_points(publications)
@@ -152,6 +218,7 @@ def calculate_points(application, publications):
 
     return {
         "course_plan_relevance_points": criteria1,
+        "course_plan_cosine_similarity": course_plan_similarity,
         "course_material_structure_points": criteria2,
         "thesis_relevance_points": criteria3,
         "phd_cosine_similarity": similarity,

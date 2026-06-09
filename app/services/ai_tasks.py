@@ -6,6 +6,9 @@ from openai import OpenAI
 
 from app.models import (
     Application,
+    CoursePlan,
+    CoursePlanEmbedding,
+    CoursePlanProfile,
     Course,
     PhdEmbedding,
     PhdProfile,
@@ -57,34 +60,29 @@ def translate_source_text(source_text, model):
     return translated
 
 
-def detect_language(source_text, model):
-    client = get_openai_client()
-    if not client or not source_text:
+def detect_language(source_text, model=None):
+    if not source_text:
         return "gr"
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Detect the language of the text. Return JSON with key language set to 'gr' or 'en'.",
-                },
-                {"role": "user", "content": source_text},
-            ],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
-    except Exception as exc:
-        logger.exception("Language detection failed: %s", exc)
+
+    letters = [char for char in source_text if char.isalpha()]
+    if not letters:
         return "gr"
-    content = response.choices[0].message.content or "{}"
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        logger.warning("Language detection returned invalid JSON: %s", content)
+
+    greek_count = sum(
+        1
+        for char in letters
+        if ("\u0370" <= char <= "\u03FF") or ("\u1F00" <= char <= "\u1FFF")
+    )
+    latin_count = sum(
+        1
+        for char in letters
+        if ("A" <= char <= "Z") or ("a" <= char <= "z")
+    )
+
+    if greek_count == 0 and latin_count == 0:
         return "gr"
-    language = str(data.get("language", "gr")).lower().strip()
-    return "en" if language == "en" else "gr"
+
+    return "gr" if greek_count >= latin_count else "en"
 
 
 def translate_text(source_text, target_language, model):
@@ -245,25 +243,68 @@ def build_phd_profile_text(title, abstract, keywords, language):
     return text.strip()
 
 
-def upsert_phd_embeddings(phd_degree, profile_text, profile_text_en, model):
+def upsert_phd_embeddings(phd_degree, profile_text, language, model):
     PhdEmbedding.objects.filter(phd_degree=phd_degree).delete()
-    embedding_gr = generate_embedding(profile_text, model)
-    if embedding_gr:
+    embedding_vector = generate_embedding(profile_text, model)
+    if embedding_vector:
         PhdEmbedding.objects.create(
             phd_degree=phd_degree,
             model_name=model,
-            language="gr",
-            vector=embedding_gr,
+            language=language,
+            vector=embedding_vector,
         )
+        return True
+    return False
 
-    embedding_en = generate_embedding(profile_text_en, model)
-    if embedding_en:
-        PhdEmbedding.objects.create(
-            phd_degree=phd_degree,
+
+def build_course_plan_profile_text(course_plans, language):
+    if language == "en":
+        course_label = "Course"
+        labels = {
+            "general_description": "General course description",
+            "learning_objectives": "Learning objectives",
+            "course_schedule": "Course schedule - Teaching material",
+            "delivery_methods": "Delivery mode & teaching methods",
+            "bibliography_material": "Bibliography - Educational material",
+            "learning_outcomes": "Learning outcomes",
+            "assessment_methods_criteria": "Assessment methods and criteria",
+        }
+    else:
+        course_label = "Μάθημα"
+        labels = {
+            "general_description": "Γενική περιγραφή μαθήματος",
+            "learning_objectives": "Μαθησιακοί στόχοι",
+            "course_schedule": "Προγραμματισμός μαθημάτων - Διδακτέα ύλη",
+            "delivery_methods": "Τρόπος παράδοσης & διδακτικές μέθοδοι",
+            "bibliography_material": "Βιβλιογραφία - Εκπαιδευτικό υλικό",
+            "learning_outcomes": "Μαθησιακά αποτελέσματα",
+            "assessment_methods_criteria": "Μέθοδοι και κριτήρια αξιολόγησης",
+        }
+
+    parts = []
+    for idx, course_plan in enumerate(course_plans, start=1):
+        course_name = normalize_source_text(getattr(course_plan.course, "name", "") or "")
+        parts.append(f"{course_label} {idx}: {course_name}")
+        for field_name, label in labels.items():
+            content = normalize_source_text(getattr(course_plan, field_name, "") or "")
+            parts.append(f"{label}: {content}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
+
+
+def upsert_course_plan_embeddings(profile, profile_text, language, model):
+    CoursePlanEmbedding.objects.filter(profile=profile).delete()
+    embedding_vector = generate_embedding(profile_text, model)
+    if embedding_vector:
+        CoursePlanEmbedding.objects.create(
+            profile=profile,
             model_name=model,
-            language="en",
-            vector=embedding_en,
+            language=language,
+            vector=embedding_vector,
         )
+        return True
+    return False
 
 
 def process_phd_ai_job(application_id, submission_id=None, user_id=None, progress_label=None):
@@ -278,12 +319,11 @@ def process_phd_ai_job(application_id, submission_id=None, user_id=None, progres
         set_submission_progress_safe(
             submission_id,
             user_id,
-            55,
+            78,
             progress_label,
             detail="AI processing",
         )
 
-    translation_model = "gpt-4.1"
     embedding_model = "text-embedding-3-small"
     detect_text = "\n".join(
         [
@@ -292,7 +332,7 @@ def process_phd_ai_job(application_id, submission_id=None, user_id=None, progres
             ", ".join(application.phd_keywords or []),
         ]
     ).strip()
-    detected_language = detect_language(detect_text, translation_model)
+    detected_language = detect_language(detect_text, model=None)
 
     if detected_language == "en":
         abstract_en = application.phd_abstract
@@ -304,15 +344,11 @@ def process_phd_ai_job(application_id, submission_id=None, user_id=None, progres
             keywords_en,
             "en",
         )
-        title_gr = translate_text(application.phd_title, "gr", translation_model) or application.phd_title
-        abstract_gr = translate_text(abstract_en, "gr", translation_model) or abstract_en
-        keywords_gr = translate_keywords(keywords_en, "gr", translation_model) or keywords_en
-        profile_text_gr = build_phd_profile_text(
-            title_gr,
-            abstract_gr,
-            keywords_gr,
-            "gr",
-        )
+        title_gr = ""
+        abstract_gr = ""
+        keywords_gr = []
+        profile_text_gr = ""
+        embedding_profile_text = profile_text_en
     else:
         abstract_gr = application.phd_abstract
         keywords_gr = application.phd_keywords or []
@@ -323,15 +359,11 @@ def process_phd_ai_job(application_id, submission_id=None, user_id=None, progres
             keywords_gr,
             "gr",
         )
-        title_en = translate_text(application.phd_title, "en", translation_model) or application.phd_title
-        abstract_en = translate_text(abstract_gr, "en", translation_model) or abstract_gr
-        keywords_en = translate_keywords(keywords_gr, "en", translation_model) or keywords_gr
-        profile_text_en = build_phd_profile_text(
-            title_en,
-            abstract_en,
-            keywords_en,
-            "en",
-        )
+        title_en = ""
+        abstract_en = ""
+        keywords_en = []
+        profile_text_en = ""
+        embedding_profile_text = profile_text_gr
 
     phd_profile, _ = PhdProfile.objects.get_or_create(phd_degree=degree)
     phd_profile.title = title_gr
@@ -345,12 +377,67 @@ def process_phd_ai_job(application_id, submission_id=None, user_id=None, progres
     phd_profile.original_language = detected_language
     phd_profile.save()
 
-    upsert_phd_embeddings(
+    embedding_created = upsert_phd_embeddings(
         degree,
-        profile_text_gr,
-        profile_text_en,
+        embedding_profile_text,
+        detected_language,
         embedding_model,
     )
+    if not embedding_created:
+        raise RuntimeError("Αποτυχία δημιουργίας embedding για το διδακτορικό.")
+
+    return {"status": "ok", "application_id": application_id}
+
+
+def process_course_plan_ai_job(application_id, submission_id=None, user_id=None, progress_label=None):
+    application = Application.objects.select_related("position", "position__scientific_field").filter(id=application_id).first()
+    if not application:
+        return {"status": "not_found", "application_id": application_id}
+
+    course_plans = list(
+        CoursePlan.objects.filter(application=application)
+        .select_related("course")
+        .order_by("course_id")
+    )
+    if not course_plans:
+        return {"status": "skipped", "application_id": application_id}
+
+    if submission_id and user_id and progress_label:
+        set_submission_progress_safe(
+            submission_id,
+            user_id,
+            78,
+            progress_label,
+            detail="AI processing",
+        )
+
+    detect_text = "\n".join(
+        [
+            normalize_source_text(getattr(cp.course, "name", "") or "")
+            for cp in course_plans
+        ]
+        + [
+            normalize_source_text(getattr(cp, "general_description", "") or "")
+            for cp in course_plans
+        ]
+    ).strip()
+    detected_language = detect_language(detect_text, model=None)
+    profile_text = build_course_plan_profile_text(course_plans, detected_language)
+
+    profile, _ = CoursePlanProfile.objects.get_or_create(application=application)
+    profile.profile_text = profile_text
+    profile.original_language = detected_language
+    profile.save()
+
+    embedding_model = "text-embedding-3-small"
+    embedding_created = upsert_course_plan_embeddings(
+        profile,
+        profile_text,
+        detected_language,
+        embedding_model,
+    )
+    if not embedding_created:
+        raise RuntimeError("Αποτυχία δημιουργίας embedding για το σχεδιάγραμμα μαθήματος.")
 
     return {"status": "ok", "application_id": application_id}
 
