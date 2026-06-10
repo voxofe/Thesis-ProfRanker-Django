@@ -32,3 +32,5 @@ journal_data.csv
 .env
 
 /cache
+
+activate.bat

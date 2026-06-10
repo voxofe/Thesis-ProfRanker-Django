@@ -93,10 +93,14 @@ def calculate_course_plan_relevance_points(application):
     if similarity is None:
         return 0, None
 
-    min_useful = 0.47
-    max_useful = 0.82
+    # Stricter calibration for criterion 1:
+    # - raise lower bound so weak/tangential matches stay low
+    # - widen high-end range and apply mild non-linearity to compress the middle
+    min_useful = 0.52
+    max_useful = 0.86
     normalized = (similarity - min_useful) / (max_useful - min_useful)
     normalized = max(0.0, min(1.0, normalized))
+    normalized = normalized ** 1.25
 
     points = custom_round(normalized * 25)
     return max(0, min(25, points)), similarity
