@@ -84,6 +84,12 @@ def is_position_active(position, now=None):
     return start_dt <= now <= end_dt
 
 
+def format_athens_datetime(value):
+    if not value:
+        return ""
+    return timezone.localtime(value, ZoneInfo("Europe/Athens")).strftime("%d-%m-%Y %H:%M")
+
+
 def validate_vault_file(uploaded_file, doc_type=None):
     if not uploaded_file:
         return "Missing file."
@@ -690,11 +696,8 @@ def build_profile_response(user, profile, applications=None):
     for application in applications or []:
         has_submitted_applications = True
         sf = application.position.scientific_field if application.position else None
-        submit_date = (
-            timezone.localtime(application.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
-            if application.submitted_at
-            else ""
-        )
+        submit_date = format_athens_datetime(application.submitted_at)
+        last_resubmission_date = format_athens_datetime(application.last_resubmitted_at)
         position_end_date = (
             application.position.end_date.strftime("%d-%m-%Y")
             if application.position and application.position.end_date
@@ -723,6 +726,8 @@ def build_profile_response(user, profile, applications=None):
                 "department": sf.department if sf else "",
                 "school": get_school_of_department(sf.department) if sf else "",
                 "submitDate": submit_date,
+                "firstSubmissionDate": submit_date,
+                "lastResubmissionDate": last_resubmission_date,
                 "positionStartDate": position_start_date,
                 "positionStartTime": position_start_time,
                 "positionEndDate": position_end_date,
@@ -1706,6 +1711,10 @@ def handle_form_submission(request):
 
             application.save()
 
+            if not created:
+                application.last_resubmitted_at = timezone.now()
+                application.save(update_fields=["last_resubmitted_at"])
+
             existing_course_plans = {
                 plan.course_id: plan
                 for plan in CoursePlan.objects.filter(
@@ -2158,7 +2167,9 @@ def get_applicant_score(request, application_id):
             }
             for publication in application.publications.all()
         ],
-        "submitDate": timezone.localtime(application.submitted_at, ZoneInfo("Europe/Athens")).strftime("%d-%m-%Y %H:%M") if application.submitted_at else "",
+        "submitDate": format_athens_datetime(application.submitted_at),
+        "firstSubmissionDate": format_athens_datetime(application.submitted_at),
+        "lastResubmissionDate": format_athens_datetime(application.last_resubmitted_at),
         "positionStartDate": application.position.start_date.strftime("%d-%m-%Y") if application.position and application.position.start_date else "",
         "positionEndDate": application.position.end_date.strftime("%d-%m-%Y") if application.position and application.position.end_date else "",
         "positionStartTime": application.position.start_time.strftime("%H:%M") if application.position and application.position.start_time else "",
@@ -2368,9 +2379,10 @@ def get_all_scores(request):
                 continue
 
             if hasattr(app, "submitted_at") and app.submitted_at:
-                submit_date = timezone.localtime(app.submitted_at, tz).strftime("%d-%m-%Y %H:%M")
+                submit_date = format_athens_datetime(app.submitted_at)
             else:
                 submit_date = ""
+            last_resubmission_date = format_athens_datetime(app.last_resubmitted_at)
             result.append({
                 "id": user.id,
                 "applicationId": app.id,
@@ -2381,6 +2393,8 @@ def get_all_scores(request):
                 "department": app.position.scientific_field.department,
                 "scientificField": app.position.scientific_field.name,
                 "submitDate": submit_date,
+                "firstSubmissionDate": submit_date,
+                "lastResubmissionDate": last_resubmission_date,
                 "positionStartDate": app.position.start_date.strftime("%d-%m-%Y") if app.position and app.position.start_date else "",
                 "positionEndDate": app.position.end_date.strftime("%d-%m-%Y") if app.position and app.position.end_date else "",
                 "positionStartTime": app.position.start_time.strftime("%H:%M") if app.position and app.position.start_time else "",

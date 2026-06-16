@@ -375,6 +375,7 @@ class Application(models.Model):
     total_points = models.IntegerField(default=0, blank=True, null=True)
 
     submitted_at = models.DateTimeField(auto_now_add=True)
+    last_resubmitted_at = models.DateTimeField(blank=True, null=True)
     position = models.ForeignKey(Position, on_delete=models.CASCADE, related_name="applications", null=True, blank=True)
 
     class Meta:
