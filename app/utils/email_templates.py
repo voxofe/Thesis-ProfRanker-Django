@@ -18,7 +18,7 @@ def build_guest_registration_email(context=None):
     )
     subject = "Επιβεβαίωση εγγραφής στο ProfRanker"
     headline = (
-        "Καλώς ήρθατε στο ProfRanker, το σύστημα αυτόματης αξιολόγησης "
+        "Καλώς ήρθατε στο ProfRanker, την εφαρμογή αυτόματης αξιολόγησης "
         "υποψηφίων καθηγητών του Πανεπιστημίου Πατρών!"
     )
     body_html = (
@@ -50,7 +50,7 @@ def build_admin_registration_email(context=None):
     )
     subject = "Επιβεβαίωση εγγραφής ως διαχειριστής στο ProfRanker"
     headline = (
-        "Καλώς ήρθατε ως διαχειριστής στο ProfRanker, το σύστημα αυτόματης "
+        "Καλώς ήρθατε ως διαχειριστής στο ProfRanker, την εφαρμογή αυτόματης "
         "αξιολόγησης υποψηφίων καθηγητών του Πανεπιστημίου Πατρών!"
     )
     body_html = (

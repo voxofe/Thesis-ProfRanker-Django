@@ -46,7 +46,8 @@ urlpatterns = [
     path('api/scientific-fields', views.scientific_fields_collection, name='scientific_fields_collection'),
     path('api/scientific-fields/<int:sf_id>', views.scientific_field_detail, name='scientific_field_detail'),
     path('api/positions', views.positions_collection, name='positions_collection'),
-    path('api/positions/<int:position_id>', views.position_detail, name='position_detail')
+    path('api/positions/<int:position_id>', views.position_detail, name='position_detail'),
+    path('api/user/change-password', views.change_password, name='change_password'),
 ]
 
 if settings.DEBUG:

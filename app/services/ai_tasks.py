@@ -6,10 +6,12 @@ from openai import OpenAI
 
 from app.models import (
     Application,
+    Course,
+    CourseEmbedding,
+    CourseProfile,
     CoursePlan,
     CoursePlanEmbedding,
     CoursePlanProfile,
-    Course,
     PhdEmbedding,
     PhdProfile,
     ScientificField,
@@ -190,10 +192,19 @@ def extract_keywords_bilingual(source_text, model):
     return keywords_gr, keywords_en
 
 
+_EMBEDDING_MAX_CHARS = 24000  # text-embedding-3-small: 8191 token limit, ~3 chars/token safe budget
+
+
 def generate_embedding(text, model):
     client = get_openai_client()
     if not client or not text:
         return None
+    # Truncate if the text exceeds the model's safe input size.
+    if len(text) > _EMBEDDING_MAX_CHARS:
+        logger.warning(
+            "Embedding input truncated from %d to %d chars.", len(text), _EMBEDDING_MAX_CHARS
+        )
+        text = text[:_EMBEDDING_MAX_CHARS]
     try:
         response = client.embeddings.create(model=model, input=text)
     except Exception as exc:
@@ -257,40 +268,41 @@ def upsert_phd_embeddings(phd_degree, profile_text, language, model):
     return False
 
 
-def build_course_plan_profile_text(course_plans, language):
-    if language == "en":
-        course_label = "Course"
-        labels = {
-            "general_description": "General course description",
-            "learning_objectives": "Learning objectives",
-            "course_schedule": "Course schedule - Teaching material",
-            "delivery_methods": "Delivery mode & teaching methods",
-            "bibliography_material": "Bibliography - Educational material",
-            "learning_outcomes": "Learning outcomes",
-            "assessment_methods_criteria": "Assessment methods and criteria",
-        }
-    else:
-        course_label = "Μάθημα"
-        labels = {
-            "general_description": "Γενική περιγραφή μαθήματος",
-            "learning_objectives": "Μαθησιακοί στόχοι",
-            "course_schedule": "Προγραμματισμός μαθημάτων - Διδακτέα ύλη",
-            "delivery_methods": "Τρόπος παράδοσης & διδακτικές μέθοδοι",
-            "bibliography_material": "Βιβλιογραφία - Εκπαιδευτικό υλικό",
-            "learning_outcomes": "Μαθησιακά αποτελέσματα",
-            "assessment_methods_criteria": "Μέθοδοι και κριτήρια αξιολόγησης",
-        }
+def build_course_profile_text(course):
+    return "\n".join(
+        [
+            normalize_source_text(getattr(course, "name", "") or ""),
+            normalize_source_text(getattr(course, "description", "") or ""),
+        ]
+    ).strip()
 
-    parts = []
-    for idx, course_plan in enumerate(course_plans, start=1):
-        course_name = normalize_source_text(getattr(course_plan.course, "name", "") or "")
-        parts.append(f"{course_label} {idx}: {course_name}")
-        for field_name, label in labels.items():
-            content = normalize_source_text(getattr(course_plan, field_name, "") or "")
-            parts.append(f"{label}: {content}")
-        parts.append("")
 
-    return "\n".join(parts).strip()
+def build_course_plan_profile_text(course_plan):
+    parts = [
+        normalize_source_text(getattr(course_plan.course, "name", "") or ""),
+        normalize_source_text(getattr(course_plan, "general_description", "") or ""),
+        normalize_source_text(getattr(course_plan, "learning_objectives", "") or ""),
+        normalize_source_text(getattr(course_plan, "course_schedule", "") or ""),
+        normalize_source_text(getattr(course_plan, "delivery_methods", "") or ""),
+        normalize_source_text(getattr(course_plan, "bibliography_material", "") or ""),
+        normalize_source_text(getattr(course_plan, "learning_outcomes", "") or ""),
+        normalize_source_text(getattr(course_plan, "assessment_methods_criteria", "") or ""),
+    ]
+    return "\n".join([part for part in parts if part]).strip()
+
+
+def upsert_course_embeddings(course, profile_text, language, model):
+    CourseEmbedding.objects.filter(course=course).delete()
+    embedding_vector = generate_embedding(profile_text, model)
+    if embedding_vector:
+        CourseEmbedding.objects.create(
+            course=course,
+            model_name=model,
+            language=language,
+            vector=embedding_vector,
+        )
+        return True
+    return False
 
 
 def upsert_course_plan_embeddings(profile, profile_text, language, model):
@@ -411,33 +423,26 @@ def process_course_plan_ai_job(application_id, submission_id=None, user_id=None,
             detail="AI processing",
         )
 
-    detect_text = "\n".join(
-        [
-            normalize_source_text(getattr(cp.course, "name", "") or "")
-            for cp in course_plans
-        ]
-        + [
-            normalize_source_text(getattr(cp, "general_description", "") or "")
-            for cp in course_plans
-        ]
-    ).strip()
-    detected_language = detect_language(detect_text, model=None)
-    profile_text = build_course_plan_profile_text(course_plans, detected_language)
-
-    profile, _ = CoursePlanProfile.objects.get_or_create(application=application)
-    profile.profile_text = profile_text
-    profile.original_language = detected_language
-    profile.save()
-
     embedding_model = "text-embedding-3-small"
-    embedding_created = upsert_course_plan_embeddings(
-        profile,
-        profile_text,
-        detected_language,
-        embedding_model,
-    )
-    if not embedding_created:
-        raise RuntimeError("Αποτυχία δημιουργίας embedding για το σχεδιάγραμμα μαθήματος.")
+    for course_plan in course_plans:
+        profile_text = build_course_plan_profile_text(course_plan)
+        detected_language = detect_language(profile_text, model=None)
+
+        profile, _ = CoursePlanProfile.objects.get_or_create(course_plan=course_plan)
+        profile.profile_text = profile_text
+        profile.original_language = detected_language
+        profile.save()
+
+        embedding_created = upsert_course_plan_embeddings(
+            profile,
+            profile_text,
+            detected_language,
+            embedding_model,
+        )
+        if not embedding_created:
+            raise RuntimeError(
+                f"Αποτυχία δημιουργίας embedding για το σχεδιάγραμμα μαθήματος {course_plan.course_id}."
+            )
 
     return {"status": "ok", "application_id": application_id}
 
@@ -499,5 +504,28 @@ def process_scientific_field_ai_job(scientific_field_id, source_text=None):
         profile_text_en,
         "text-embedding-3-small",
     )
+
+    # Build course-level profiles/embeddings for one-to-one matching with course-plan embeddings.
+    embedding_model = "text-embedding-3-small"
+    courses = list(Course.objects.filter(scientific_field=sf).order_by("id"))
+    for course in courses:
+        course_profile_text = build_course_profile_text(course)
+        detected_language = detect_language(course_profile_text, model=None)
+
+        course_profile, _ = CourseProfile.objects.get_or_create(course=course)
+        course_profile.profile_text = course_profile_text
+        course_profile.original_language = detected_language
+        course_profile.save()
+
+        embedding_created = upsert_course_embeddings(
+            course,
+            course_profile_text,
+            detected_language,
+            embedding_model,
+        )
+        if not embedding_created:
+            raise RuntimeError(
+                f"Αποτυχία δημιουργίας embedding για το μάθημα {course.id}."
+            )
 
     return {"status": "ok", "scientific_field_id": scientific_field_id}

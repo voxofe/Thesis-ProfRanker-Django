@@ -211,6 +211,8 @@ class ScientificField(models.Model):
     name = models.CharField(max_length=255)
     department = models.CharField(max_length=255)
     school = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.name} ({self.department})"
@@ -230,6 +232,7 @@ class ScientificFieldEmbedding(models.Model):
     language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default="gr")
     vector = VectorField(dimensions=1536)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Embedding {self.id} - {self.model_name}"
@@ -278,6 +281,52 @@ class Course(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CourseProfile(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
+
+    course = models.OneToOneField(
+        Course,
+        on_delete=models.CASCADE,
+        related_name="profile",
+    )
+    profile_text = models.TextField(blank=True, null=True)
+    original_language = models.CharField(
+        max_length=2,
+        choices=LANGUAGE_CHOICES,
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Course Profile - Course {self.course_id}"
+
+
+class CourseEmbedding(models.Model):
+    LANGUAGE_CHOICES = [
+        ("gr", "Greek"),
+        ("en", "English"),
+    ]
+
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name="embeddings",
+    )
+    model_name = models.CharField(max_length=255)
+    language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default="gr")
+    vector = VectorField(dimensions=1536)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Course Embedding {self.id} - {self.model_name}"
 
 class Position(models.Model):
     scientific_field = models.OneToOneField(ScientificField, on_delete=models.CASCADE, related_name="position")
@@ -394,10 +443,10 @@ class CoursePlanProfile(models.Model):
         ("en", "English"),
     ]
 
-    application = models.OneToOneField(
-        Application,
+    course_plan = models.OneToOneField(
+        CoursePlan,
         on_delete=models.CASCADE,
-        related_name="course_plan_profile",
+        related_name="profile",
     )
     profile_text = models.TextField(blank=True, null=True)
     original_language = models.CharField(
@@ -410,7 +459,7 @@ class CoursePlanProfile(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Course Plan Profile - Application {self.application_id}"
+        return f"Course Plan Profile - CoursePlan {self.course_plan_id}"
 
 
 class CoursePlanEmbedding(models.Model):

@@ -2446,6 +2446,7 @@ def scientific_fields_collection(request):
                     "name": sf.name,
                     "department": sf.department,
                     "school": sf.school,
+                    "createdAt": sf.created_at.isoformat() if sf.created_at else None,
                     "positionId": pos.id if pos else None,
                     "positionStartDate": pos.start_date if pos else None,
                     "positionEndDate": pos.end_date if pos else None,
@@ -2511,12 +2512,6 @@ def scientific_fields_collection(request):
     else:
         profile.save(update_fields=["source_text", "profile_text"])
 
-    try:
-        enqueue_job(process_scientific_field_ai_job, sci_field.id, source_text)
-    except Exception as exc:
-        print(f"RQ enqueue failed (scientific field create): {exc}")
-        process_scientific_field_ai_job(sci_field.id, source_text)
-
     for course in courses:
         Course.objects.create(
             scientific_field=sci_field,
@@ -2530,6 +2525,8 @@ def scientific_fields_collection(request):
             lab_hours=course.get("lab_hours"),
             category=course.get("category"),
         )
+
+    process_scientific_field_ai_job(sci_field.id, source_text)
 
     return JsonResponse(
         {
@@ -2617,11 +2614,7 @@ def scientific_field_detail(request, sf_id):
         else:
             profile.save(update_fields=["source_text", "profile_text"])
 
-        try:
-            enqueue_job(process_scientific_field_ai_job, sf.id, source_text)
-        except Exception as exc:
-            print(f"RQ enqueue failed (scientific field update): {exc}")
-            process_scientific_field_ai_job(sf.id, source_text)
+        process_scientific_field_ai_job(sf.id, source_text)
 
         return JsonResponse(
             {
@@ -2923,3 +2916,34 @@ def position_detail(request, position_id):
 
     position.delete()
     return JsonResponse({"message": "Position deleted successfully."}, status=200)
+
+
+@csrf_exempt
+@api_view(["POST"])
+def change_password(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token."}, status=401)
+
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found."}, status=404)
+
+    current_password = request.data.get("currentPassword", "")
+    new_password = request.data.get("newPassword", "")
+
+    if not current_password or not new_password:
+        return JsonResponse({"error": "Όλα τα πεδία είναι υποχρεωτικά."}, status=400)
+
+    if not user.check_password(current_password):
+        return JsonResponse({"error": "Ο τρέχων κωδικός πρόσβασης είναι λανθασμένος."}, status=400)
+
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    return JsonResponse({"message": "Ο κωδικός πρόσβασης άλλαξε επιτυχώς."}, status=200)
