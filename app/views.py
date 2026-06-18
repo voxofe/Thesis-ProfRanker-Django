@@ -152,12 +152,57 @@ PROFILE_DOC_FIELD_MAP = {
 COURSE_PLAN_FIELDS_MAP = {
     "generalDescription": "general_description",
     "learningObjectives": "learning_objectives",
-    "courseSchedule": "course_schedule",
+    "courseScheduleWeek1": "week_1",
+    "courseScheduleWeek2": "week_2",
+    "courseScheduleWeek3": "week_3",
+    "courseScheduleWeek4": "week_4",
+    "courseScheduleWeek5": "week_5",
+    "courseScheduleWeek6": "week_6",
+    "courseScheduleWeek7": "week_7",
+    "courseScheduleWeek8": "week_8",
+    "courseScheduleWeek9": "week_9",
+    "courseScheduleWeek10": "week_10",
+    "courseScheduleWeek11": "week_11",
+    "courseScheduleWeek12": "week_12",
+    "courseScheduleWeek13": "week_13",
     "deliveryMethods": "delivery_methods",
     "bibliographyMaterial": "bibliography_material",
     "learningOutcomes": "learning_outcomes",
     "assessmentMethodsCriteria": "assessment_methods_criteria",
 }
+
+def combine_course_schedule_from_weeks(plan_payload):
+    lines = []
+    for week_index in range(1, 14):
+        api_key = f"courseScheduleWeek{week_index}"
+        value = (plan_payload.get(api_key) or "").strip()
+        if value:
+            lines.append(f"Εβδομάδα {week_index}: {value}")
+    return "\n".join(lines).strip()
+
+
+def serialize_course_plan_payload(course_plan):
+    payload = {
+        "generalDescription": course_plan.general_description or "",
+        "learningObjectives": course_plan.learning_objectives or "",
+        "courseSchedule": course_plan.course_schedule or "",
+        "deliveryMethods": course_plan.delivery_methods or "",
+        "bibliographyMaterial": course_plan.bibliography_material or "",
+        "learningOutcomes": course_plan.learning_outcomes or "",
+        "assessmentMethodsCriteria": course_plan.assessment_methods_criteria or "",
+    }
+
+    week_values = []
+    for week_index in range(1, 14):
+        field_name = f"week_{week_index}"
+        value = getattr(course_plan, field_name, "") or ""
+        payload[f"courseScheduleWeek{week_index}"] = value
+        week_values.append(value.strip())
+
+    if not any(week_values) and payload["courseSchedule"]:
+        payload["courseScheduleWeek1"] = payload["courseSchedule"]
+
+    return payload
 
 
 def profile_doc_info(doc):
@@ -300,15 +345,7 @@ def build_application_form(app):
         return []
 
     existing_course_plans = {
-        str(course_plan.course_id): {
-            "generalDescription": course_plan.general_description or "",
-            "learningObjectives": course_plan.learning_objectives or "",
-            "courseSchedule": course_plan.course_schedule or "",
-            "deliveryMethods": course_plan.delivery_methods or "",
-            "bibliographyMaterial": course_plan.bibliography_material or "",
-            "learningOutcomes": course_plan.learning_outcomes or "",
-            "assessmentMethodsCriteria": course_plan.assessment_methods_criteria or "",
-        }
+        str(course_plan.course_id): serialize_course_plan_payload(course_plan)
         for course_plan in CoursePlan.objects.filter(application=app)
     }
 
@@ -1495,6 +1532,10 @@ def handle_form_submission(request):
                         )
                     normalized_plan[db_field] = value
 
+                normalized_plan["course_schedule"] = combine_course_schedule_from_weeks(
+                    plan_payload
+                )
+
                 normalized_course_plans[course.id] = normalized_plan
 
             # --- Get or create Application ---
@@ -2081,15 +2122,7 @@ def get_applicant_score(request, application_id):
     user = application.user
     sf = application.position.scientific_field if application.position else None
     course_plans = {
-        str(course_plan.course_id): {
-            "generalDescription": course_plan.general_description or "",
-            "learningObjectives": course_plan.learning_objectives or "",
-            "courseSchedule": course_plan.course_schedule or "",
-            "deliveryMethods": course_plan.delivery_methods or "",
-            "bibliographyMaterial": course_plan.bibliography_material or "",
-            "learningOutcomes": course_plan.learning_outcomes or "",
-            "assessmentMethodsCriteria": course_plan.assessment_methods_criteria or "",
-        }
+        str(course_plan.course_id): serialize_course_plan_payload(course_plan)
         for course_plan in CoursePlan.objects.filter(application=application)
     }
 
