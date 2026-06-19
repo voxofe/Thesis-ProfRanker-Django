@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/jobs/positions/close-emails', views.cron_send_position_closed_emails, name='cron_send_position_closed_emails'),
     path('api/users/getByToken', views.get_user_by_token, name='get_user_by_token'),
     path('api/users/list', views.users_list, name='users_list'),
+    path('api/admin/analytics/summary', views.admin_analytics_summary, name='admin_analytics_summary'),
     path('api/guests/ranking-visit', views.increment_guest_ranking_visit, name='increment_guest_ranking_visit'),
     path('api/profile', views.profile_detail, name='profile_detail'),
     path('api/admin/profile/<int:user_id>', views.admin_profile_detail, name='admin_profile_detail'),

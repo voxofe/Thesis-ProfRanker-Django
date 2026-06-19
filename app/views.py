@@ -1,6 +1,7 @@
 from django.http import JsonResponse, FileResponse
 from django.db import models
-from django.db.models import Count
+from django.db.models import Count, Avg
+from django.db.models.functions import ExtractYear, TruncDay, TruncWeek, TruncMonth
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -571,6 +572,459 @@ def users_list(request):
             })
 
     return JsonResponse({"users": data}, status=200)
+
+
+@csrf_exempt
+@api_view(["GET"])
+def admin_analytics_summary(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+
+    user_id = payload.get("user_id")
+    requester = User.objects.filter(id=user_id).first()
+    if not requester or requester.role != "admin":
+        return JsonResponse({"error": "Only admins can view analytics."}, status=403)
+
+    year_param = (request.GET.get("year") or "").strip()
+    school_param = (request.GET.get("school") or "").strip()
+    department_param = (request.GET.get("department") or "").strip()
+    position_param = (request.GET.get("positionId") or "").strip()
+
+    applications = Application.objects.select_related("user", "position__scientific_field")
+
+    if year_param:
+        try:
+            applications = applications.filter(submitted_at__year=int(year_param))
+        except ValueError:
+            return JsonResponse({"error": "Invalid year filter."}, status=400)
+
+    if school_param:
+        applications = applications.filter(position__scientific_field__school=school_param)
+
+    if department_param:
+        applications = applications.filter(position__scientific_field__department=department_param)
+
+    if position_param:
+        try:
+            applications = applications.filter(position__scientific_field_id=int(position_param))
+        except ValueError:
+            return JsonResponse({"error": "Invalid positionId filter."}, status=400)
+
+    total_applications = applications.count()
+    applicant_user_ids = list(
+        applications.exclude(user_id__isnull=True)
+        .values_list("user_id", flat=True)
+        .distinct()
+    )
+    distinct_applicants = len(applicant_user_ids)
+    distinct_positions = applications.exclude(position_id__isnull=True).values("position_id").distinct().count()
+    total_points_agg = applications.aggregate(avg_points=Avg("total_points"))
+    avg_total_points = round((total_points_agg.get("avg_points") or 0.0), 2)
+    applicant_profiles = UserProfile.objects.filter(user_id__in=applicant_user_ids)
+    work_experience_agg = applicant_profiles.aggregate(avg_years=Avg("work_experience"))
+    avg_work_experience_years = round((work_experience_agg.get("avg_years") or 0.0), 2)
+    applications_with_publication_counts = applications.annotate(
+        publications_count=Count("publications", distinct=True)
+    )
+    avg_publications_per_application = round(
+        (
+            applications_with_publication_counts.aggregate(
+                avg_publications=Avg("publications_count")
+            ).get("avg_publications")
+            or 0.0
+        ),
+        2,
+    )
+
+    gender_rows = list(
+        applications.exclude(user_id__isnull=True)
+        .values("user__gender")
+        .annotate(count=Count("user_id", distinct=True))
+    )
+    gender_map = {
+        "male": "Άνδρες",
+        "female": "Γυναίκες",
+        None: "Χωρίς δήλωση",
+        "": "Χωρίς δήλωση",
+    }
+    gender_counts = {
+        "male": 0,
+        "female": 0,
+        "unknown": 0,
+    }
+    for row in gender_rows:
+        raw_key = row.get("user__gender")
+        norm_key = raw_key if raw_key in {"male", "female"} else "unknown"
+        gender_counts[norm_key] += row.get("count", 0) or 0
+
+    ordered_keys = ["male", "female", "unknown"]
+    gender_distribution = [
+        {
+            "key": key,
+            "label": gender_map.get(None if key == "unknown" else key, "Χωρίς δήλωση"),
+            "count": gender_counts.get(key, 0),
+        }
+        for key in ordered_keys
+        if gender_counts.get(key, 0) > 0
+    ]
+
+    phd_year_distribution_raw = list(
+        applications.exclude(phd_acquisition_date__isnull=True)
+        .annotate(year=ExtractYear("phd_acquisition_date"))
+        .values("year")
+        .annotate(count=Count("id"))
+        .order_by("year")
+    )
+    phd_year_counts = {
+        row.get("year"): row.get("count", 0) or 0
+        for row in phd_year_distribution_raw
+        if row.get("year") is not None
+    }
+    global_latest_phd_year = (
+        Application.objects.exclude(phd_acquisition_date__isnull=True)
+        .annotate(year=ExtractYear("phd_acquisition_date"))
+        .aggregate(max_year=models.Max("year"))
+        .get("max_year")
+    )
+    latest_phd_year = max(
+        2011,
+        global_latest_phd_year or 0,
+        max(phd_year_counts.keys(), default=0),
+    )
+    phd_year_distribution = [
+        {
+            "year": year,
+            "count": phd_year_counts.get(year, 0),
+        }
+        for year in range(2011, latest_phd_year + 1)
+    ]
+
+    work_experience_distribution_raw = list(
+        applicant_profiles.exclude(work_experience__isnull=True)
+        .values("work_experience")
+        .annotate(count=Count("user_id", distinct=True))
+        .order_by("work_experience")
+    )
+    work_experience_counts = {
+        int(row.get("work_experience")): row.get("count", 0) or 0
+        for row in work_experience_distribution_raw
+        if row.get("work_experience") is not None and 0 <= int(row.get("work_experience")) <= 10
+    }
+    work_experience_distribution = [
+        {
+            "years": years,
+            "count": work_experience_counts.get(years, 0),
+        }
+        for years in range(0, 11)
+    ]
+
+    positions_scope_qs = ScientificField.objects.select_related("position")
+    if school_param:
+        positions_scope_qs = positions_scope_qs.filter(school=school_param)
+    if department_param:
+        positions_scope_qs = positions_scope_qs.filter(department=department_param)
+    if position_param:
+        try:
+            positions_scope_qs = positions_scope_qs.filter(id=int(position_param))
+        except ValueError:
+            return JsonResponse({"error": "Invalid positionId filter."}, status=400)
+
+    school_distribution_raw = list(
+        applications.values("position__scientific_field__school")
+        .annotate(
+            applications_count=Count("id"),
+            applicants_count=Count("user_id", distinct=True),
+            avg_points=Avg("total_points"),
+        )
+    )
+    school_metrics = {
+        row.get("position__scientific_field__school") or "": {
+            "applications_count": row.get("applications_count", 0),
+            "applicants_count": row.get("applicants_count", 0),
+            "avg_points": row.get("avg_points") or 0.0,
+        }
+        for row in school_distribution_raw
+    }
+    school_distribution = []
+    school_names = list(
+        positions_scope_qs.values_list("school", flat=True)
+        .distinct()
+        .order_by("school")
+    )
+    for school_name in school_names:
+        metric = school_metrics.get(school_name, {})
+        school_distribution.append(
+            {
+                "name": school_name or "Χωρίς σχολή",
+                "applications": metric.get("applications_count", 0),
+                "applicants": metric.get("applicants_count", 0),
+                "avgPoints": round((metric.get("avg_points") or 0.0), 2),
+            }
+        )
+    school_distribution.sort(key=lambda row: (-row.get("applications", 0), row.get("name") or ""))
+
+    department_distribution_raw = list(
+        applications.values("position__scientific_field__department")
+        .annotate(
+            applications_count=Count("id"),
+            applicants_count=Count("user_id", distinct=True),
+            avg_points=Avg("total_points"),
+        )
+    )
+    department_metrics = {
+        row.get("position__scientific_field__department") or "": {
+            "applications_count": row.get("applications_count", 0),
+            "applicants_count": row.get("applicants_count", 0),
+            "avg_points": row.get("avg_points") or 0.0,
+        }
+        for row in department_distribution_raw
+    }
+    department_distribution = []
+    department_names = list(
+        positions_scope_qs.values_list("department", flat=True)
+        .distinct()
+        .order_by("department")
+    )
+    for department_name in department_names:
+        metric = department_metrics.get(department_name, {})
+        department_distribution.append(
+            {
+                "name": department_name or "Χωρίς τμήμα",
+                "applications": metric.get("applications_count", 0),
+                "applicants": metric.get("applicants_count", 0),
+                "avgPoints": round((metric.get("avg_points") or 0.0), 2),
+            }
+        )
+    department_distribution.sort(key=lambda row: (-row.get("applications", 0), row.get("name") or ""))
+
+    position_distribution_raw = list(
+        applications.values(
+            "position__scientific_field_id",
+            "position__scientific_field__name",
+            "position__scientific_field__school",
+            "position__scientific_field__department",
+        )
+        .annotate(
+            applications_count=Count("id"),
+            applicants_count=Count("user_id", distinct=True),
+            avg_points=Avg("total_points"),
+        )
+    )
+    position_metrics = {
+        row.get("position__scientific_field_id"): {
+            "applications_count": row.get("applications_count", 0),
+            "applicants_count": row.get("applicants_count", 0),
+            "avg_points": row.get("avg_points") or 0.0,
+        }
+        for row in position_distribution_raw
+    }
+    position_distribution = []
+    for sf in positions_scope_qs.order_by("name", "id"):
+        metric = position_metrics.get(sf.id, {})
+        position_distribution.append(
+            {
+                "positionId": sf.id,
+                "name": sf.name or "Χωρίς τίτλο",
+                "school": sf.school or "",
+                "department": sf.department or "",
+                "applications": metric.get("applications_count", 0),
+                "applicants": metric.get("applicants_count", 0),
+                "avgPoints": round((metric.get("avg_points") or 0.0), 2),
+            }
+        )
+    position_distribution.sort(key=lambda row: (-row.get("applications", 0), row.get("positionId") or 0))
+
+    # Publication count per application distribution
+    # Count one application per row to avoid join-amplified aggregates.
+    pub_count_values = list(
+        applications
+        .annotate(pub_count=Count("publications", distinct=True))
+        .values_list("pub_count", flat=True)
+    )
+    pub_count_map = {}
+    for raw_count in pub_count_values:
+        count_value = int(raw_count or 0)
+        pub_count_map[count_value] = pub_count_map.get(count_value, 0) + 1
+    max_pub_count = max(pub_count_map.keys(), default=0)
+    publication_count_distribution = [
+        {"publications": i, "count": pub_count_map.get(i, 0)}
+        for i in range(0, max_pub_count + 1)
+    ]
+
+    # Relevance distribution: course_plan_relevance_points + thesis_relevance_points (0-45)
+    relevance_raw = list(
+        applications
+        .annotate(
+            relevance_sum=models.ExpressionWrapper(
+                models.F("course_plan_relevance_points") + models.F("thesis_relevance_points"),
+                output_field=models.IntegerField(),
+            )
+        )
+        .values("relevance_sum")
+        .annotate(count=Count("id"))
+        .order_by("relevance_sum")
+    )
+    relevance_map = {}
+    for row in relevance_raw:
+        v = row.get("relevance_sum")
+        if v is not None:
+            clamped = max(0, min(45, int(v)))
+            relevance_map[clamped] = relevance_map.get(clamped, 0) + (row.get("count") or 0)
+    relevance_distribution = [
+        {"points": i, "count": relevance_map.get(i, 0)}
+        for i in range(0, 46)
+    ]
+
+    score_buckets = {
+        "0-19": 0,
+        "20-39": 0,
+        "40-59": 0,
+        "60-79": 0,
+        "80-96": 0,
+    }
+    score_points = {point: 0 for point in range(0, 97)}
+    for score in applications.exclude(total_points__isnull=True).values_list("total_points", flat=True):
+        clamped_score = max(0, min(96, int(score)))
+        score_points[clamped_score] += 1
+
+        if score < 20:
+            score_buckets["0-19"] += 1
+        elif score < 40:
+            score_buckets["20-39"] += 1
+        elif score < 60:
+            score_buckets["40-59"] += 1
+        elif score < 80:
+            score_buckets["60-79"] += 1
+        else:
+            # The scoring model max is 96, so all upper values belong here.
+            score_buckets["80-96"] += 1
+
+    timeline_granularity = "day"
+    timeline_trunc = TruncDay("submitted_at")
+
+    timeline_rows = list(
+        applications.annotate(bucket=timeline_trunc)
+        .values("bucket")
+        .annotate(applications_count=Count("id"))
+        .order_by("bucket")
+    )
+
+    # Build a dict of date -> count from DB rows
+    from datetime import date as date_type, timedelta
+    timeline_counts = {}
+    for row in timeline_rows:
+        bucket = row.get("bucket")
+        if bucket:
+            d = bucket.date() if hasattr(bucket, "date") else bucket
+            timeline_counts[d] = row.get("applications_count", 0) or 0
+
+    # Fill every day in range so X axis has equal spacing
+    submission_timeline = []
+    if timeline_counts:
+        first_day = min(timeline_counts.keys())
+        last_day = max(timeline_counts.keys())
+        cumulative_count = 0
+        current = first_day
+        while current <= last_day:
+            count_value = timeline_counts.get(current, 0)
+            cumulative_count += count_value
+            submission_timeline.append(
+                {
+                    "bucket": current.isoformat(),
+                    "label": current.strftime("%d-%m-%Y"),
+                    "applications": count_value,
+                    "cumulative": cumulative_count,
+                }
+            )
+            current += timedelta(days=1)
+
+    years = list(
+        Application.objects.annotate(year=ExtractYear("submitted_at"))
+        .values_list("year", flat=True)
+        .distinct()
+        .order_by("-year")
+    )
+
+    filter_positions_qs = ScientificField.objects.select_related("position")
+
+    schools = list(
+        filter_positions_qs.values_list("school", flat=True)
+        .distinct()
+        .order_by("school")
+    )
+
+    departments_qs = filter_positions_qs
+    if school_param:
+        departments_qs = departments_qs.filter(school=school_param)
+    departments = list(
+        departments_qs.values_list("department", flat=True)
+        .distinct()
+        .order_by("department")
+    )
+
+    positions_qs = ScientificField.objects.select_related("position")
+    if school_param:
+        positions_qs = positions_qs.filter(school=school_param)
+    if department_param:
+        positions_qs = positions_qs.filter(department=department_param)
+
+    positions = [
+        {
+            "id": sf.id,
+            "label": f"{sf.name} ({sf.department})",
+            "scientificField": sf.name,
+            "school": sf.school,
+            "department": sf.department,
+        }
+        for sf in positions_qs.order_by("name")
+    ]
+
+    payload = {
+        "summary": {
+            "totalApplications": total_applications,
+            "distinctApplicants": distinct_applicants,
+            "positionsWithApplications": distinct_positions,
+            "avgTotalPoints": avg_total_points,
+            "avgWorkExperienceYears": avg_work_experience_years,
+            "avgPublicationsPerApplication": avg_publications_per_application,
+        },
+        "breakdowns": {
+            "byGender": gender_distribution,
+            "byPhdYear": phd_year_distribution,
+            "byWorkExperience": work_experience_distribution,
+            "bySchool": school_distribution,
+            "byDepartment": department_distribution,
+            "byPosition": position_distribution,
+            "scoreBuckets": [
+                {"label": label, "count": count}
+                for label, count in score_buckets.items()
+            ],
+            "scorePoints": [
+                {"score": point, "count": count}
+                for point, count in score_points.items()
+            ],
+            "byPublicationCount": publication_count_distribution,
+            "byRelevancePoints": relevance_distribution,
+            "submissionTimeline": {
+                "granularity": timeline_granularity,
+                "series": submission_timeline,
+            },
+        },
+        "filters": {
+            "years": [year for year in years if year is not None],
+            "schools": [school for school in schools if school],
+            "departments": [department for department in departments if department],
+            "positions": positions,
+        },
+    }
+
+    return JsonResponse(payload, status=200)
 
 
 @csrf_exempt
