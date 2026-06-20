@@ -2738,23 +2738,11 @@ def delete_application(request, application_id):
     links = list(
         ApplicationDocument.objects.filter(application=application).select_related("vault_document")
     )
-    degree = application.phd_degree
-    has_other_degree_refs = False
-    if degree:
-        has_other_degree_refs = Application.objects.filter(phd_degree=degree).exclude(id=application.id).exists()
 
     application.delete()
 
     for link in links:
         cleanup_profile_doc_if_orphan(link.vault_document)
-
-    if degree and not has_other_degree_refs:
-        degree_docs = [degree.vault_document, degree.doatap_document]
-        degree.vault_document = None
-        degree.doatap_document = None
-        degree.save(update_fields=["vault_document", "doatap_document"])
-        for doc in degree_docs:
-            cleanup_profile_doc_if_orphan(doc)
 
     if application_user_id:
         app_dir = os.path.join(
