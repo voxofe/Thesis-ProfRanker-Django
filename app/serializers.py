@@ -12,6 +12,7 @@ class UserSerializer(serializers.ModelSerializer):
             'email',
             'role',
             'gender',
+            'verified',
         ]
 
 # Serializer for Application

@@ -50,17 +50,19 @@ from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.core.cache import cache
 from django.conf import settings
+from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
 from django.core.files.base import File
 import logging
 import time
 import json
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from django.utils import timezone
 from zoneinfo import ZoneInfo
 from app.constants.departments import get_school_of_department
 import os
 import mimetypes
+from urllib.parse import urlencode
 
 MAX_VAULT_UPLOAD_BYTES = 5 * 1024 * 1024
 PHD_PDF_MAX_BYTES = 30 * 1024 * 1024
@@ -71,6 +73,33 @@ PHD_KEYWORDS_MIN = 3
 PHD_KEYWORDS_MAX = 10
 
 logger = logging.getLogger(__name__)
+
+
+def build_email_verification_token(user):
+    signer = TimestampSigner(salt=settings.EMAIL_VERIFICATION_SALT)
+    return signer.sign(f"{user.id}:{user.email}")
+
+
+def decode_email_verification_token(token):
+    signer = TimestampSigner(salt=settings.EMAIL_VERIFICATION_SALT)
+    unsigned = signer.unsign(token, max_age=settings.EMAIL_VERIFICATION_TTL_SECONDS)
+    user_id, email = unsigned.split(":", 1)
+    return int(user_id), email
+
+
+def build_email_verification_url(token):
+    query = urlencode({"token": token})
+    return f"{settings.FRONTEND_BASE_URL.rstrip('/')}/verify-email?{query}"
+
+
+def send_email_verification_message(user):
+    token = build_email_verification_token(user)
+    verify_url = build_email_verification_url(token)
+    send_template_email_async(
+        "email_verification",
+        user.email,
+        {"verify_url": verify_url},
+    )
 
 def is_position_active(position, now=None):
     if not position or not position.start_date or not position.end_date:
@@ -441,12 +470,18 @@ def user_register(request):
         email=email,
         role="guest",
         gender=gender,
+        verified=not getattr(settings, "EMAIL_VERIFICATION_ENABLED", True),
     )
     user.set_password(password)
     user.save()
 
     try:
-        send_template_email_async("guest_registration", user.email)
+        if getattr(settings, "EMAIL_VERIFICATION_ENABLED", True):
+            token = build_email_verification_token(user)
+            verify_url = build_email_verification_url(token)
+            send_template_email_async("guest_registration", user.email, {"verify_url": verify_url})
+        else:
+            send_template_email_async("guest_registration", user.email, {})
     except Exception as exc:
         print(f"Registration email failed: {exc}")
 
@@ -485,7 +520,8 @@ def user_register_admin(request):
         first_name=first_name,
         last_name=last_name,
         email=email,
-        role="admin"
+        role="admin",
+        verified=True,
     )
     new_admin.set_password(password)
     new_admin.save()
@@ -1150,6 +1186,7 @@ def get_user_by_token(request):
         "firstName": user.first_name,
         "lastName": user.last_name,
         "email": user.email,
+        "verified": bool(user.verified),
         "mobileNumber": profile.mobile_number if profile else None,
         "landlineNumber": profile.landline_number if profile else None,
         "streetAddress": profile.street_address if profile else None,
@@ -1177,6 +1214,119 @@ def get_user_by_token(request):
         user_data["form"] = forms[0]
 
     return JsonResponse(user_data, safe=False)
+
+
+@csrf_exempt
+@api_view(["POST"])
+def send_verification_email(request):
+    if not getattr(settings, "EMAIL_VERIFICATION_ENABLED", True):
+        return JsonResponse(
+            {"message": "Η επιβεβαίωση email είναι απενεργοποιημένη."},
+            status=200,
+        )
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    if user.verified:
+        return JsonResponse({"message": "Το email είναι ήδη επιβεβαιωμένο."}, status=200)
+
+    cooldown_seconds = max(0, int(getattr(settings, "EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS", 60)))
+    daily_limit = max(1, int(getattr(settings, "EMAIL_VERIFICATION_DAILY_LIMIT", 10)))
+    now_ts = int(time.time())
+    now_utc = datetime.utcnow()
+
+    cooldown_cache_key = f"verification_email_cooldown:user:{user.id}"
+    daily_count_cache_key = f"verification_email_daily_count:user:{user.id}:{datetime.utcnow().strftime('%Y%m%d')}"
+    next_midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    daily_window_ttl_seconds = max(1, int((next_midnight_utc - now_utc).total_seconds()))
+
+    if cooldown_seconds > 0:
+        cooldown_until = cache.get(cooldown_cache_key)
+        if cooldown_until:
+            retry_after = max(1, int(cooldown_until - now_ts))
+            if retry_after > 0:
+                return JsonResponse(
+                    {
+                        "error": f"Μπορείτε να ξαναστείλετε σε {retry_after} δευτερόλεπτα.",
+                        "code": "verification_email_rate_limited",
+                        "retryAfterSeconds": retry_after,
+                    },
+                    status=429,
+                )
+
+    daily_sent_count = int(cache.get(daily_count_cache_key) or 0)
+    if daily_sent_count >= daily_limit:
+        return JsonResponse(
+            {
+                "error": "Έχετε φτάσει το μέγιστο πλήθος αποστολών επιβεβαίωσης για σήμερα.",
+                "code": "verification_email_daily_limit",
+                "retryAfterSeconds": daily_window_ttl_seconds,
+            },
+            status=429,
+        )
+
+    try:
+        send_email_verification_message(user)
+    except Exception:
+        return JsonResponse({"error": "Αποτυχία αποστολής email επιβεβαίωσης."}, status=500)
+
+    if cooldown_seconds > 0:
+        cache.set(cooldown_cache_key, now_ts + cooldown_seconds, timeout=cooldown_seconds)
+
+    # Cache until next UTC midnight.
+    cache.set(daily_count_cache_key, daily_sent_count + 1, timeout=daily_window_ttl_seconds)
+
+    return JsonResponse(
+        {
+            "message": "Το email επιβεβαίωσης στάλθηκε επιτυχώς.",
+            "retryAfterSeconds": cooldown_seconds,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+@api_view(["GET", "POST"])
+def verify_email(request):
+    if not getattr(settings, "EMAIL_VERIFICATION_ENABLED", True):
+        return JsonResponse(
+            {"message": "Η επιβεβαίωση email είναι απενεργοποιημένη."},
+            status=200,
+        )
+
+    token = (request.query_params.get("token") or request.data.get("token") or "").strip()
+    if not token:
+        return JsonResponse({"error": "Missing verification token."}, status=400)
+
+    try:
+        user_id, email = decode_email_verification_token(token)
+    except SignatureExpired:
+        return JsonResponse({"error": "Το link επιβεβαίωσης έχει λήξει."}, status=400)
+    except (BadSignature, ValueError):
+        return JsonResponse({"error": "Μη έγκυρο link επιβεβαίωσης."}, status=400)
+
+    user = User.objects.filter(id=user_id, email=email).first()
+    if not user:
+        return JsonResponse({"error": "Ο χρήστης δεν βρέθηκε."}, status=404)
+
+    if user.verified:
+        return JsonResponse({"message": "Το email έχει ήδη επιβεβαιωθεί."}, status=200)
+
+    user.verified = True
+    user.save(update_fields=["verified"])
+    return JsonResponse({"message": "Η επιβεβαίωση email ολοκληρώθηκε επιτυχώς."}, status=200)
 
 
 def build_profile_response(user, profile, applications=None):

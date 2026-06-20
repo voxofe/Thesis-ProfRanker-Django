@@ -35,6 +35,7 @@ class User(models.Model):
     role = models.CharField(max_length=10, choices=ROLES)
     gender = models.CharField(max_length=6, choices=GENDERS, blank=True, null=True)
     password = models.CharField(max_length=128)  # Store hashed password
+    verified = models.BooleanField(default=False)
     ranking_visits = models.IntegerField(default=0)
 
     def set_password(self, raw_password):

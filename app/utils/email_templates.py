@@ -2,34 +2,42 @@ from html import escape
 
 
 def build_guest_registration_email(context=None):
+    context = context or {}
+    verify_url = escape(context.get("verify_url", ""))
+    has_verify_url = bool(verify_url)
     cta_html = (
         "<table role=\"presentation\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" "
         "style=\"margin:18px auto 8px;\">"
         "<tr>"
         "<td align=\"center\">"
-        "<a href=\"https://profrankerapp.com/login\" "
+        f"<a href=\"{verify_url}\" "
         "style=\"display:inline-block;background:#633439;color:#ffffff;text-decoration:none;"
         "padding:10px 18px;border-radius:8px;font-weight:600;\">"
-        "Σύνδεση"
+        "Επιβεβαίωση email"
         "</a>"
         "</td>"
         "</tr>"
         "</table>"
-    )
+    ) if has_verify_url else ""
     subject = "Επιβεβαίωση εγγραφής στο ProfRanker"
     headline = (
         "Καλώς ήρθατε στο ProfRanker, την εφαρμογή αυτόματης αξιολόγησης "
         "υποψηφίων καθηγητών του Πανεπιστημίου Πατρών!"
     )
-    body_html = (
-        "<p>Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Μπορείτε πλέον να συνδεθείτε "
-        "και να υποβάλετε αίτηση στις διαθέσιμες θέσεις.</p>"
-        f"{cta_html}"
-    )
-    text = (
-        "Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Μπορείτε πλέον να συνδεθείτε "
-        "και να υποβάλετε αίτηση στις διαθέσιμες θέσεις."
-    )
+    if has_verify_url:
+        body_html = (
+            "<p>Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Για να ενεργοποιήσετε τον λογαριασμό σας "
+            "και να αποκτήσετε πρόσβαση σε όλες τις λειτουργίες, παρακαλώ επιβεβαιώστε το email σας.</p>"
+            f"{cta_html}"
+        )
+        text = (
+            "Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Για να ενεργοποιήσετε τον λογαριασμό σας "
+            "και να αποκτήσετε πρόσβαση σε όλες τις λειτουργίες, παρακαλώ επιβεβαιώστε το email σας. "
+            f"Επιβεβαίωση: {verify_url}"
+        )
+    else:
+        body_html = "<p>Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Μπορείτε να συνδεθείτε και να χρησιμοποιήσετε την εφαρμογή.</p>"
+        text = "Η εγγραφή σας ολοκληρώθηκε με επιτυχία. Μπορείτε να συνδεθείτε και να χρησιμοποιήσετε την εφαρμογή."
     return subject, headline, body_html, text
 
 
@@ -61,6 +69,35 @@ def build_admin_registration_email(context=None):
     text = (
         "Ο λογαριασμός διαχειριστή σας δημιουργήθηκε. Μπορείτε να συνδεθείτε "
         "και να διαχειριστείτε αιτήσεις, θέσεις, επιστημονικά πεδία κ.α."
+    )
+    return subject, headline, body_html, text
+
+
+def build_email_verification_email(context):
+    verify_url = escape(context.get("verify_url", ""))
+
+    subject = "Επιβεβαίωση email στο ProfRanker"
+    headline = "Ολοκληρώστε την επιβεβαίωση της ηλεκτρονικής σας διεύθυνσης."
+    body_html = (
+        "<p>Για να ενεργοποιηθεί ο λογαριασμός σας και να αποκτήσετε πρόσβαση στις λειτουργίες του ProfRanker, "
+        "παρακαλώ επιβεβαιώστε το email σας.</p>"
+        "<table role=\"presentation\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" "
+        "style=\"margin:18px auto 8px;\">"
+        "<tr>"
+        "<td align=\"center\">"
+        f"<a href=\"{verify_url}\" "
+        "style=\"display:inline-block;background:#633439;color:#ffffff;text-decoration:none;"
+        "padding:10px 18px;border-radius:8px;font-weight:600;\">"
+        "Επιβεβαίωση email"
+        "</a>"
+        "</td>"
+        "</tr>"
+        "</table>"
+    )
+    text = (
+        "Για να ενεργοποιηθεί ο λογαριασμός σας και να αποκτήσετε πρόσβαση στις λειτουργίες του ProfRanker, "
+        "παρακαλώ επιβεβαιώστε το email σας. "
+        f"Επιβεβαίωση: {verify_url}"
     )
     return subject, headline, body_html, text
 
@@ -180,6 +217,7 @@ def build_position_closed_email(context):
 EMAIL_TEMPLATE_BUILDERS = {
     "guest_registration": build_guest_registration_email,
     "admin_registration": build_admin_registration_email,
+    "email_verification": build_email_verification_email,
     "application_submitted": build_application_submission_email,
     "application_resubmitted": build_application_resubmission_email,
     "position_closed": build_position_closed_email,

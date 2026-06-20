@@ -16,6 +16,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def parse_env_bool(value, default=True):
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -61,6 +72,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'app.middleware.EmailVerificationRequiredMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -151,6 +163,20 @@ if CLIENT_URL and CLIENT_URL not in CLIENT_ORIGINS:
 
 CORS_ALLOWED_ORIGINS = CLIENT_ORIGINS
 CSRF_TRUSTED_ORIGINS = CLIENT_ORIGINS
+
+FRONTEND_BASE_URL = CLIENT_URL or "http://localhost:3000"
+EMAIL_VERIFICATION_ENABLED = parse_env_bool(
+    os.getenv("EMAIL_VERIFICATION_ENABLED", "true"),
+    True,
+)
+EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "email-verification").strip()
+EMAIL_VERIFICATION_TTL_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TTL_SECONDS", "86400"))
+EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS = int(
+    os.getenv("EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS", "60")
+)
+EMAIL_VERIFICATION_DAILY_LIMIT = int(
+    os.getenv("EMAIL_VERIFICATION_DAILY_LIMIT", "20")
+)
 
 RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
