@@ -1,0 +1,118 @@
+services:
+  - type: web
+    name: profranker-api
+    env: python
+    plan: standard
+    rootDir: server
+    buildCommand: bash build.sh
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: "api.profrankerapp.com,*.onrender.com"
+      - key: CLIENT_URL
+        value: "https://profrankerapp.com"
+      - key: SECURE_SSL_REDIRECT
+        value: "True"
+      - key: SECURE_HSTS_SECONDS
+        value: "31536000"
+      - key: SECURE_HSTS_INCLUDE_SUBDOMAINS
+        value: "True"
+      - key: SECURE_HSTS_PRELOAD
+        value: "True"
+      - key: SESSION_COOKIE_SECURE
+        value: "True"
+      - key: CSRF_COOKIE_SECURE
+        value: "True"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: profranker-redis
+          type: redis
+          property: connectionString
+      - key: RQ_QUEUE_NAME
+        value: "background"
+      - key: USE_S3_MEDIA
+        value: "True"
+      - key: AWS_S3_ENDPOINT_URL
+        value: "https://0aaeeedefed8b47bfee8b00934b48013.r2.cloudflarestorage.com"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_STORAGE_BUCKET_NAME
+        value: "profranker-media"
+      - key: AWS_S3_REGION_NAME
+        value: "auto"
+      - key: AWS_S3_CUSTOM_DOMAIN
+        value: ""
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_API_URL
+        value: "https://api.resend.com/emails"
+      - key: RESEND_FROM_EMAIL
+        value: "noreply@profrankerapp.com"
+      - key: EMAIL_VERIFICATION_ENABLED
+        value: "True"
+      - key: EMAIL_VERIFICATION_SALT
+        value: "email-verification"
+      - key: EMAIL_VERIFICATION_TTL_SECONDS
+        value: "86400"
+      - key: EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS
+        value: "60"
+      - key: EMAIL_VERIFICATION_DAILY_LIMIT
+        value: "20"
+      - key: CRON_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  - type: worker
+    name: profranker-worker
+    env: python
+    plan: standard
+    rootDir: server
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/services/rq_worker.py
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          name: profranker-api
+          type: web
+          envVarKey: DJANGO_SECRET_KEY
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: profranker-redis
+          type: redis
+          property: connectionString
+      - key: RQ_QUEUE_NAME
+        value: "background"
+      - key: USE_S3_MEDIA
+        value: "True"
+      - key: AWS_S3_ENDPOINT_URL
+        value: "https://0aaeeedefed8b47bfee8b00934b48013.r2.cloudflarestorage.com"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_STORAGE_BUCKET_NAME
+        value: "profranker-media"
+      - key: AWS_S3_REGION_NAME
+        value: "auto"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  - type: redis
+    name: profranker-redis
+    plan: starter
+    ipAllowList: []

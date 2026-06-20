@@ -1849,11 +1849,21 @@ def profile_document_manage(request, doc_id):
         if validation_error:
             return JsonResponse({"error": validation_error}, status=400)
 
-        if profile_doc.file:
-            profile_doc.file.delete(save=False)
-        profile_doc.file = new_file
-        profile_doc.uploaded_at = timezone.now()
-        profile_doc.save(update_fields=["file", "uploaded_at"])
+        try:
+            if profile_doc.file:
+                profile_doc.file.delete(save=False)
+            profile_doc.file = new_file
+            profile_doc.uploaded_at = timezone.now()
+            profile_doc.save(update_fields=["file", "uploaded_at"])
+        except Exception as exc:
+            logger.exception("Vault replace failed for user_id=%s doc_id=%s", user.id, doc_id)
+            return JsonResponse(
+                {
+                    "error": "Αποτυχία αντικατάστασης αρχείου στο αποθηκευτικό νέφος. Ελέγξτε τις ρυθμίσεις R2.",
+                    "details": str(exc),
+                },
+                status=502,
+            )
 
         return JsonResponse(profile_doc_info(profile_doc), safe=False)
 
@@ -1921,12 +1931,23 @@ def profile_document_create(request):
     if validation_error:
         return JsonResponse({"error": validation_error}, status=400)
 
-    profile_doc = VaultDocument.objects.create(
-        user=user,
-        doc_type=doc_type,
-        file=new_file,
-        is_default=True,
-    )
+    try:
+        profile_doc = VaultDocument.objects.create(
+            user=user,
+            doc_type=doc_type,
+            file=new_file,
+            is_default=True,
+        )
+    except Exception as exc:
+        logger.exception("Vault create failed for user_id=%s doc_type=%s", user.id, doc_type)
+        return JsonResponse(
+            {
+                "error": "Αποτυχία αποθήκευσης αρχείου στο αποθηκευτικό νέφος. Ελέγξτε τις ρυθμίσεις R2.",
+                "details": str(exc),
+            },
+            status=502,
+        )
+
     if doc_type in SINGLE_DOC_TYPES:
         ensure_single_default(user, doc_type, keep_id=profile_doc.id)
 

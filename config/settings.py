@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,15 +34,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Read media settings from .env
 MEDIA_URL = os.getenv("MEDIA_URL", "/media/")
 MEDIA_ROOT = os.path.join(BASE_DIR, os.getenv("MEDIA_ROOT", "media"))
+USE_S3_MEDIA = parse_env_bool(os.getenv("USE_S3_MEDIA", "false"), False)
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-b5lq#a(_8p^93kcn=+bz59shij(-vfiji@vn7n65yx1s2wzohk'
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-me")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = parse_env_bool(os.getenv("DJANGO_DEBUG", "true"), True)
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 ENV_ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").strip()
@@ -65,11 +67,26 @@ INSTALLED_APPS = [
     'app',
     'rest_framework'
 ]
+if USE_S3_MEDIA:
+    INSTALLED_APPS.append('storages')
+
 APPEND_SLASH = False
+
+SECURE_SSL_REDIRECT = parse_env_bool(os.getenv("SECURE_SSL_REDIRECT", "false"), False)
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = parse_env_bool(
+    os.getenv("SECURE_HSTS_INCLUDE_SUBDOMAINS", "false"),
+    False,
+)
+SECURE_HSTS_PRELOAD = parse_env_bool(os.getenv("SECURE_HSTS_PRELOAD", "false"), False)
+SESSION_COOKIE_SECURE = parse_env_bool(os.getenv("SESSION_COOKIE_SECURE", "false"), False)
+CSRF_COOKIE_SECURE = parse_env_bool(os.getenv("CSRF_COOKIE_SECURE", "false"), False)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'app.middleware.EmailVerificationRequiredMiddleware',
@@ -103,16 +120,34 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'prof_ranker_db',
-        'USER': 'postgres',
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': 'localhost',
-        'PORT': '5432',
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+if DATABASE_URL:
+    parsed_database_url = urlparse(DATABASE_URL)
+    parsed_query = parse_qs(parsed_database_url.query)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': unquote(parsed_database_url.path.lstrip('/')),
+            'USER': unquote(parsed_database_url.username or ''),
+            'PASSWORD': unquote(parsed_database_url.password or ''),
+            'HOST': parsed_database_url.hostname or '',
+            'PORT': str(parsed_database_url.port or '5432'),
+            'OPTIONS': {
+                **({'sslmode': parsed_query['sslmode'][0]} if 'sslmode' in parsed_query else {}),
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME', 'prof_ranker_db'),
+            'USER': os.getenv('DB_USER', 'postgres'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST', 'localhost'),
+            'PORT': os.getenv('DB_PORT', '5432'),
+        }
+    }
 
 
 # Password validation
@@ -149,7 +184,34 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+if USE_S3_MEDIA:
+    AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "").strip()
+    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
+    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
+    AWS_STORAGE_BUCKET_NAME = os.getenv("AWS_STORAGE_BUCKET_NAME", "").strip()
+    AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "auto").strip()
+    AWS_S3_SIGNATURE_VERSION = "s3v4"
+    AWS_S3_ADDRESSING_STYLE = "path"
+    AWS_DEFAULT_ACL = None
+    AWS_QUERYSTRING_AUTH = False
+    AWS_S3_FILE_OVERWRITE = False
+
+    s3_custom_domain = os.getenv("AWS_S3_CUSTOM_DOMAIN", "").strip()
+    if s3_custom_domain:
+        MEDIA_URL = f"https://{s3_custom_domain}/"
+
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3.S3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
