@@ -34,3 +34,4 @@ journal_data.csv
 /cache
 
 activate.bat
+prof_ranker_db.dump
