@@ -190,6 +190,27 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 if USE_S3_MEDIA:
     import certifi
+    import ssl
+
+    # Patch urllib3 SSL context to fix TLS handshake failure on Render with Cloudflare R2.
+    # Render's OpenSSL security level rejects R2's cipher negotiation; lowering to SECLEVEL=1
+    # restores compatibility without disabling certificate verification.
+    try:
+        import urllib3.util.ssl_ as _urllib3_ssl
+        _orig_create_ctx = _urllib3_ssl.create_urllib3_context
+
+        def _patched_create_urllib3_context(*args, **kwargs):
+            ctx = _orig_create_ctx(*args, **kwargs)
+            try:
+                ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+            except ssl.SSLError:
+                pass
+            return ctx
+
+        _urllib3_ssl.create_urllib3_context = _patched_create_urllib3_context
+    except Exception:
+        pass
+
     AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "").strip()
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
     AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
