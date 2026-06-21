@@ -16,6 +16,11 @@ class EmailVerificationRequiredMiddleware:
         "/api/users/getByToken",
     }
 
+    FIRST_LOGIN_ALLOWED_PATHS = {
+        "/api/user/change-password",
+        "/api/users/getByToken",
+    }
+
     def __init__(self, get_response):
         self.get_response = get_response
 
@@ -50,6 +55,19 @@ class EmailVerificationRequiredMiddleware:
                 {
                     "error": "Email verification required.",
                     "code": "email_not_verified",
+                },
+                status=403,
+            )
+
+        if (
+            user.role == "admin"
+            and getattr(user, "must_change_password", False)
+            and path not in self.FIRST_LOGIN_ALLOWED_PATHS
+        ):
+            return JsonResponse(
+                {
+                    "error": "Password change is required before continuing.",
+                    "code": "first_login_password_required",
                 },
                 status=403,
             )

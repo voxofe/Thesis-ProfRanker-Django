@@ -39,6 +39,7 @@ from .models import (
     Course,
     UserProfile,
     ProfilePublication,
+    PasswordHistory,
     VaultDocument,
     ApplicationDocument,
     PhdDegree,
@@ -50,6 +51,7 @@ from .utils.jwt_utils import generate_jwt, decode_jwt
 from django.views.decorators.csrf import csrf_exempt
 from django.core.cache import cache
 from django.conf import settings
+from django.contrib.auth.hashers import check_password
 from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
 from django.core.files.base import File
 import logging
@@ -522,12 +524,21 @@ def user_register_admin(request):
         email=email,
         role="admin",
         verified=True,
+        must_change_password=True,
     )
     new_admin.set_password(password)
-    new_admin.save()
+
+    PasswordHistory.objects.create(
+        user=new_admin,
+        password_hash=new_admin.password,
+    )
 
     try:
-        send_template_email_async("admin_registration", new_admin.email)
+        send_template_email_async(
+            "admin_registration",
+            new_admin.email,
+            {"login_url": "https://profrankerapp.com/login"},
+        )
     except Exception as exc:
         print(f"Admin registration email failed: {exc}")
 
@@ -544,7 +555,14 @@ def user_login(request):
         user = User.objects.get(email=email)
         if user.check_password(password):
             token = generate_jwt(user.id)
-            return JsonResponse({"token": token}, status=200)
+            return JsonResponse(
+                {
+                    "token": token,
+                    "mustChangePassword": bool(getattr(user, "must_change_password", False)),
+                    "role": user.role,
+                },
+                status=200,
+            )
         else:
             return JsonResponse({"error": "Invalid credentials"}, status=401)
     except User.DoesNotExist:
@@ -1187,6 +1205,7 @@ def get_user_by_token(request):
         "lastName": user.last_name,
         "email": user.email,
         "verified": bool(user.verified),
+        "mustChangePassword": bool(getattr(user, "must_change_password", False)),
         "mobileNumber": profile.mobile_number if profile else None,
         "landlineNumber": profile.landline_number if profile else None,
         "streetAddress": profile.street_address if profile else None,
@@ -1859,7 +1878,7 @@ def profile_document_manage(request, doc_id):
             logger.exception("Vault replace failed for user_id=%s doc_id=%s", user.id, doc_id)
             return JsonResponse(
                 {
-                    "error": "Αποτυχία αντικατάστασης αρχείου στο αποθηκευτικό νέφος. Ελέγξτε τις ρυθμίσεις R2.",
+                    "error": "Αποτυχία αντικατάστασης αρχείου στο cloud. Ελέγξτε τις ρυθμίσεις R2.",
                     "details": str(exc),
                 },
                 status=502,
@@ -1942,7 +1961,7 @@ def profile_document_create(request):
         logger.exception("Vault create failed for user_id=%s doc_type=%s", user.id, doc_type)
         return JsonResponse(
             {
-                "error": "Αποτυχία αποθήκευσης αρχείου στο αποθηκευτικό νέφος. Ελέγξτε τις ρυθμίσεις R2.",
+                "error": "Αποτυχία αποθήκευσης αρχείου στο cloud. Ελέγξτε τις ρυθμίσεις R2.",
                 "details": str(exc),
             },
             status=502,
@@ -3604,6 +3623,28 @@ def change_password(request):
     if not user.check_password(current_password):
         return JsonResponse({"error": "Ο τρέχων κωδικός πρόσβασης είναι λανθασμένος."}, status=400)
 
+    if user.check_password(new_password):
+        return JsonResponse(
+            {"error": "Ο νέος κωδικός δεν μπορεί να είναι ίδιος με τον τρέχοντα."},
+            status=400,
+        )
+
+    if user.role == "admin":
+        old_hashes = PasswordHistory.objects.filter(user=user).values_list("password_hash", flat=True)
+        for old_hash in old_hashes:
+            if check_password(new_password, old_hash):
+                return JsonResponse(
+                    {"error": "Δεν μπορείτε να χρησιμοποιήσετε ξανά προηγούμενο κωδικό."},
+                    status=400,
+                )
+
     user.set_password(new_password)
-    user.save(update_fields=["password"])
+
+    if user.role == "admin":
+        user.must_change_password = False
+        user.save(update_fields=["password", "must_change_password"])
+        PasswordHistory.objects.create(user=user, password_hash=user.password)
+    else:
+        user.save(update_fields=["password"])
+
     return JsonResponse({"message": "Ο κωδικός πρόσβασης άλλαξε επιτυχώς."}, status=200)

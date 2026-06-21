@@ -42,15 +42,17 @@ def build_guest_registration_email(context=None):
 
 
 def build_admin_registration_email(context=None):
+    context = context or {}
+    login_url = escape(context.get("login_url") or "https://profrankerapp.com/login")
     cta_html = (
         "<table role=\"presentation\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\" "
         "style=\"margin:18px auto 8px;\">"
         "<tr>"
         "<td align=\"center\">"
-        "<a href=\"https://profrankerapp.com/login\" "
+        f"<a href=\"{login_url}\" "
         "style=\"display:inline-block;background:#633439;color:#ffffff;text-decoration:none;"
         "padding:10px 18px;border-radius:8px;font-weight:600;\">"
-        "Σύνδεση διαχειριστή"
+        "Αλλαγή κωδικού και σύνδεση"
         "</a>"
         "</td>"
         "</tr>"
@@ -64,11 +66,15 @@ def build_admin_registration_email(context=None):
     body_html = (
         "<p>Ο λογαριασμός διαχειριστή σας δημιουργήθηκε. Μπορείτε να συνδεθείτε "
         "και να διαχειριστείτε αιτήσεις, θέσεις, επιστημονικά πεδία κ.α.</p>"
+        "<p><strong>Σημαντικό:</strong> Επειδή ο αρχικός κωδικός ορίστηκε από άλλον διαχειριστή, "
+        "στην πρώτη σύνδεση θα σας ζητηθεί υποχρεωτικά να τον αλλάξετε πριν συνεχίσετε.</p>"
         f"{cta_html}"
     )
     text = (
         "Ο λογαριασμός διαχειριστή σας δημιουργήθηκε. Μπορείτε να συνδεθείτε "
-        "και να διαχειριστείτε αιτήσεις, θέσεις, επιστημονικά πεδία κ.α."
+        "και να διαχειριστείτε αιτήσεις, θέσεις, επιστημονικά πεδία κ.α. "
+        "Σημαντικό: Στην πρώτη σύνδεση θα σας ζητηθεί υποχρεωτικά αλλαγή κωδικού. "
+        f"Σύνδεση: {login_url}"
     )
     return subject, headline, body_html, text
 
