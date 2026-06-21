@@ -189,6 +189,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 if USE_S3_MEDIA:
+    import certifi
     AWS_S3_ENDPOINT_URL = os.getenv("AWS_S3_ENDPOINT_URL", "").strip()
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
     AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
@@ -199,6 +200,7 @@ if USE_S3_MEDIA:
     AWS_DEFAULT_ACL = None
     AWS_QUERYSTRING_AUTH = False
     AWS_S3_FILE_OVERWRITE = False
+    AWS_S3_VERIFY = certifi.where()
 
     s3_custom_domain = os.getenv("AWS_S3_CUSTOM_DOMAIN", "").strip()
     if s3_custom_domain:
