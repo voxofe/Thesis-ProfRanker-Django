@@ -1201,6 +1201,62 @@ def cron_send_position_closed_emails(request):
 
     return JsonResponse({"job_id": job.id, "status": "queued"}, status=202)
 
+
+@api_view(["GET"])
+def debug_sjr_lookup(request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JsonResponse({"error": "Authorization token missing."}, status=401)
+    token = auth_header.split(" ")[1]
+
+    payload = decode_jwt(token)
+    if not payload:
+        return JsonResponse({"error": "Invalid or expired token"}, status=401)
+
+    user_id = payload.get("user_id")
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return JsonResponse({"error": "User not found"}, status=404)
+    if user.role != "admin":
+        return JsonResponse({"error": "Forbidden."}, status=403)
+
+    year = (request.query_params.get("year") or "").strip()
+    issn = (request.query_params.get("issn") or "").strip()
+    if not year or not issn:
+        return JsonResponse(
+            {"error": "Both query params 'year' and 'issn' are required."},
+            status=400,
+        )
+
+    result = get_sjr_quartile(year, issn, include_source=True)
+    if not result:
+        return JsonResponse(
+            {
+                "found": False,
+                "year": year,
+                "issn": issn,
+                "lookupSource": "none",
+            },
+            status=404,
+        )
+
+    return JsonResponse(
+        {
+            "found": True,
+            "year": year,
+            "issn": issn,
+            "lookupSource": result.get("lookup_source", "unknown"),
+            "sjrQuartile": result.get("sjr_quartile"),
+            "title": result.get("title"),
+            "country": result.get("country"),
+            "dbLookupEnabled": bool(getattr(settings, "DB_SJR_LOOKUP_ENABLED", False)),
+            "dbFallbackToParquet": bool(
+                getattr(settings, "DB_SJR_LOOKUP_FALLBACK_TO_PARQUET", True)
+            ),
+        },
+        status=200,
+    )
+
 # Get User by Token
 @api_view(["GET"])
 def get_user_by_token(request):

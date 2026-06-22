@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/user/send-verification-email', views.send_verification_email, name='send_verification_email'),
     path('api/user/verify-email', views.verify_email, name='verify_email'),
     path('api/email/test', views.email_test, name='email_test'),
+    path('api/debug/sjr-lookup', views.debug_sjr_lookup, name='debug_sjr_lookup'),
     path('api/jobs/positions/close-emails', views.cron_send_position_closed_emails, name='cron_send_position_closed_emails'),
     path('api/users/getByToken', views.get_user_by_token, name='get_user_by_token'),
     path('api/users/list', views.users_list, name='users_list'),

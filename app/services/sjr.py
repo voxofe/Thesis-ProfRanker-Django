@@ -1,13 +1,42 @@
-import pandas as pd
-from .sjr_cache import get_sjr_data  
+from django.conf import settings
+
+from app.models import SjrLookup
+
+from .sjr_cache import get_sjr_data
 
 # SJR Quartile Retrieval Logic
 
-def get_sjr_quartile(year, issn):
-    
+def _normalize_issn(value):
+    return str(value or "").replace("-", "").replace(" ", "").strip().upper()
+
+
+def get_sjr_quartile(year, issn, include_source=False):
+    year = str(year or "").strip()
+    normalized_issn = _normalize_issn(issn)
+    if not year or not normalized_issn:
+        return None
+
+    if getattr(settings, "DB_SJR_LOOKUP_ENABLED", False):
+        db_match = (
+            SjrLookup.objects.filter(year=year, issn_norm=normalized_issn)
+            .only("sjr_quartile", "title", "country")
+            .first()
+        )
+        if db_match:
+            result = {
+                "sjr_quartile": db_match.sjr_quartile,
+                "title": db_match.title,
+                "country": db_match.country,
+            }
+            if include_source:
+                result["lookup_source"] = "db"
+            return result
+        if not getattr(settings, "DB_SJR_LOOKUP_FALLBACK_TO_PARQUET", True):
+            return None
+
     df = get_sjr_data(year)
     if df is None:
-        return None 
+        return None
 
     # Identify the correct quartile column
     quartile_column = None
@@ -22,17 +51,11 @@ def get_sjr_quartile(year, issn):
 
     # Ensure ISSN is a string and handle empty ISSN cases
     df["issn"] = df["issn"].astype(str)
-    if not issn.strip():
-        print(f"⚠️ Empty ISSN provided. Skipping ISSN search.")
-        return None
-
-    def normalize_issn(issn):
-        return issn.replace("-", "").replace(" ", "").strip().upper()
 
     def issn_match(row_issn, target_issn):
         # Split on comma, normalize each, and check for match
-        issn_list = [normalize_issn(x) for x in str(row_issn).split(",")]
-        return normalize_issn(target_issn) in issn_list
+        issn_list = [_normalize_issn(x) for x in str(row_issn).split(",")]
+        return _normalize_issn(target_issn) in issn_list
 
     # Search for the ISSN
     print(f"🔎 Now searching for ISSN...")
@@ -54,6 +77,8 @@ def get_sjr_quartile(year, issn):
         "title": journal_title,   
         "country": country,
     }
+    if include_source:
+        sjr_data["lookup_source"] = "parquet"
 
     print(f"🏆 SJR Quartile: {journal_title} - {sjr_quartile}\n")
 

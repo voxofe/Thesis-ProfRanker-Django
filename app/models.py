@@ -419,6 +419,31 @@ class Publication(models.Model):
         return f"{self.publication_title} ({self.year})"
 
 
+class SjrLookup(models.Model):
+    year = models.CharField(max_length=4, db_index=True)
+    issn_norm = models.CharField(max_length=16, db_index=True)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    country = models.CharField(max_length=100, blank=True, null=True)
+    sjr_quartile = models.CharField(max_length=20, blank=True, null=True)
+    source = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["year", "issn_norm"],
+                name="unique_sjrlookup_year_issn",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["issn_norm", "year"], name="sjrlookup_issn_year_idx"),
+        ]
+
+    def __str__(self):
+        return f"SJR {self.year} {self.issn_norm}"
+
+
 class CoursePlan(models.Model):
     application = models.ForeignKey(
         Application,

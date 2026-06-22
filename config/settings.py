@@ -285,6 +285,15 @@ EMAIL_VERIFICATION_DAILY_LIMIT = int(
     os.getenv("EMAIL_VERIFICATION_DAILY_LIMIT", "20")
 )
 
+DB_SJR_LOOKUP_ENABLED = parse_env_bool(
+    os.getenv("DB_SJR_LOOKUP_ENABLED", "false"),
+    False,
+)
+DB_SJR_LOOKUP_FALLBACK_TO_PARQUET = parse_env_bool(
+    os.getenv("DB_SJR_LOOKUP_FALLBACK_TO_PARQUET", "true"),
+    True,
+)
+
 RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_FROM_EMAIL = os.getenv(
