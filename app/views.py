@@ -1407,7 +1407,7 @@ def build_profile_response(user, profile, applications=None):
     profile_publications = [
         serialize_profile_publication(publication)
         for publication in ProfilePublication.objects.filter(user=user)
-        .order_by("-updated_at", "-id")
+        .order_by("sort_order", "id")
     ]
 
     document_vault = {}
@@ -1628,11 +1628,12 @@ def profile_detail(request):
                 publication.id: publication
                 for publication in ProfilePublication.objects.filter(user=user)
             }
-            for item in profile_publications or []:
+            for position, item in enumerate(profile_publications or [], start=1):
                 payload = build_profile_publication_payload(item or {})
                 publication_id = item.get("id") if isinstance(item, dict) else None
                 if publication_id and publication_id in existing_publications:
                     db_publication = existing_publications[publication_id]
+                    db_publication.sort_order = position
                     db_publication.type = payload["type"] or None
                     db_publication.publication_title = payload["publication_title"] or None
                     db_publication.journal_conf_title = payload["journal_conf_title"] or None
@@ -1647,6 +1648,7 @@ def profile_detail(request):
                 else:
                     new_publication = ProfilePublication.objects.create(
                         user=user,
+                        sort_order=position,
                         type=payload["type"] or None,
                         publication_title=payload["publication_title"] or None,
                         journal_conf_title=payload["journal_conf_title"] or None,
@@ -2030,6 +2032,7 @@ def profile_publication_key(payload):
 def serialize_profile_publication(publication):
     return {
         "id": publication.id,
+        "sortOrder": publication.sort_order,
         "type": publication.type,
         "publicationTitle": publication.publication_title,
         "journalConfTitle": publication.journal_conf_title,

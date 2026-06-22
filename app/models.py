@@ -79,6 +79,7 @@ class UserProfile(models.Model):
 
 class ProfilePublication(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="profile_publications")
+    sort_order = models.PositiveIntegerField(default=0)
     type = models.CharField(max_length=100, blank=True, null=True)
     publication_title = models.CharField(max_length=255, blank=True, null=True)
     journal_conf_title = models.CharField(max_length=255, blank=True, null=True)
