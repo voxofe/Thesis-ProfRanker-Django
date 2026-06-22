@@ -74,6 +74,10 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: SUBMIT_AI_MAX_WORKERS
+        value: "1"
+      - key: SUBMIT_PUBLICATION_MAX_WORKERS
+        value: "1"
 
   - type: worker
     name: profranker-worker

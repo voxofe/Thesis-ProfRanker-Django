@@ -77,6 +77,20 @@ PHD_KEYWORDS_MAX = 10
 logger = logging.getLogger(__name__)
 
 
+def get_env_int(name, default, minimum=1, maximum=None):
+    raw_value = os.getenv(name, str(default)).strip()
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default=%s", name, raw_value, default)
+        parsed = default
+
+    parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
 def build_email_verification_token(user):
     signer = TimestampSigner(salt=settings.EMAIL_VERIFICATION_SALT)
     return signer.sign(f"{user.id}:{user.email}")
@@ -2451,7 +2465,11 @@ def handle_form_submission(request):
 
             if ai_jobs:
                 set_submission_progress(submission_id, user_id, 68, relevance_progress_label)
-                with ThreadPoolExecutor(max_workers=min(2, len(ai_jobs))) as executor:
+                ai_max_workers = min(
+                    get_env_int("SUBMIT_AI_MAX_WORKERS", default=1, minimum=1, maximum=2),
+                    len(ai_jobs),
+                )
+                with ThreadPoolExecutor(max_workers=ai_max_workers) as executor:
                     futures = [executor.submit(job_func, *job_args) for job_func, job_args in ai_jobs]
                     for future in futures:
                         future.result()
@@ -2525,7 +2543,13 @@ def handle_form_submission(request):
 
             # SJR results and multithreading
             sjr_results = []
-            with ThreadPoolExecutor(max_workers=4) as executor: 
+            publication_workers = get_env_int(
+                "SUBMIT_PUBLICATION_MAX_WORKERS",
+                default=1,
+                minimum=1,
+                maximum=4,
+            )
+            with ThreadPoolExecutor(max_workers=publication_workers) as executor:
                 future_to_publication = {executor.submit(process_publication, publication): publication for publication in publications}
                 total_publications = len(future_to_publication)
                 completed_publications = 0
