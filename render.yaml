@@ -7,6 +7,10 @@ services:
     buildCommand: bash build.sh
     startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
     envVars:
+      - key: APP_ENV
+        value: "production"
+      - key: USE_DATABASE_URL
+        value: "True"
       - key: DJANGO_DEBUG
         value: "False"
       - key: DJANGO_SECRET_KEY
@@ -79,6 +83,10 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python app/services/rq_worker.py
     envVars:
+      - key: APP_ENV
+        value: "production"
+      - key: USE_DATABASE_URL
+        value: "True"
       - key: DJANGO_DEBUG
         value: "False"
       - key: DJANGO_SECRET_KEY
