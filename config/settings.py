@@ -132,10 +132,15 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-USE_DATABASE_URL = parse_env_bool(
-    os.getenv("USE_DATABASE_URL", "true" if APP_ENV == "production" else "false"),
-    True if APP_ENV == "production" else False,
-)
+raw_use_database_url = os.getenv("USE_DATABASE_URL")
+if raw_use_database_url is None:
+    # Prefer DATABASE_URL automatically when it is provided (e.g. Render/Neon).
+    USE_DATABASE_URL = bool(DATABASE_URL) or APP_ENV == "production"
+else:
+    USE_DATABASE_URL = parse_env_bool(
+        raw_use_database_url,
+        True if APP_ENV == "production" else bool(DATABASE_URL),
+    )
 
 if USE_DATABASE_URL and DATABASE_URL:
     parsed_database_url = urlparse(DATABASE_URL)
