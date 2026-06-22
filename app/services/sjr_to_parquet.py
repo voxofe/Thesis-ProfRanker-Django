@@ -7,7 +7,7 @@ import pandas as pd
 
 
 DEFAULT_CACHE_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "sjr_cache")
+    os.path.join(os.path.dirname(__file__), "..", "..", "sjr_parquets")
 )
 
 

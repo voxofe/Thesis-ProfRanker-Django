@@ -19,7 +19,7 @@ db.sqlite3
 
 staticfiles/
 media/
-sjr_cache/
+sjr_parquets/
 
 # Compiled Python files
 *.pyc

@@ -1,61 +1,74 @@
-import pandas as pd
-import requests
-from io import BytesIO
-import time
 import os
+import threading
+from io import BytesIO
 
-# SJR Data Caching and Retrieval
+import pandas as pd
+from django.conf import settings
+from django.core.files.storage import default_storage
 
-CACHE_DIR = "sjr_cache"  # Create a directory to store cached files
-os.makedirs(CACHE_DIR, exist_ok=True)
+# SJR static parquet loading.
+# - Development: local filesystem under BASE_DIR/sjr_parquets
+# - Production (USE_S3_MEDIA=True): same bucket/storage backend as documents (R2)
 
-def journal_url(year):
-    return f"https://www.scimagojr.com/journalrank.php?&year={year}&type=j&out=xls"
+PARQUET_DIR_NAME = "sjr_parquets"
+_parquet_cache = {}
+_parquet_cache_lock = threading.Lock()
+
+
+def _normalize_columns(df):
+    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
+    return df
+
+
+def _local_parquet_path(year):
+    return os.path.join(str(settings.BASE_DIR), PARQUET_DIR_NAME, f"sjr_{year}.parquet")
+
+
+def _r2_parquet_key(year):
+    return f"{PARQUET_DIR_NAME}/sjr_{year}.parquet"
+
+
+def _load_local_parquet(year):
+    parquet_path = _local_parquet_path(year)
+    if not os.path.exists(parquet_path):
+        print(f"SJR parquet not found locally for {year}: {parquet_path}")
+        return None
+
+    print(f"Loading local SJR parquet for {year} from {parquet_path}")
+    df = pd.read_parquet(parquet_path)
+    return _normalize_columns(df)
+
+
+def _load_r2_parquet(year):
+    key = _r2_parquet_key(year)
+    if not default_storage.exists(key):
+        print(f"SJR parquet not found in R2 for {year}: {key}")
+        return None
+
+    print(f"Loading SJR parquet for {year} from R2 key: {key}")
+    with default_storage.open(key, "rb") as f:
+        payload = f.read()
+    df = pd.read_parquet(BytesIO(payload))
+    return _normalize_columns(df)
+
 
 def get_sjr_data(year):
-    # Fetch and cache SJR data for the given year
-    cache_file = f"{CACHE_DIR}/sjr_{year}.parquet"
-
-    # Check if data is already cached
-    if os.path.exists(cache_file):
-        print(f"💾 Loading cached SJR data for {year} from {cache_file}")
-        return pd.read_parquet(cache_file)
-    
-    url = journal_url(year)
-    print(f"\n📥 Downloading data from: {url}")
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-    }
-
-    start_time = time.time()
-    response = requests.get(url, headers=headers)
-    end_time = time.time()
-    execution_time = end_time - start_time
-
-    if response.status_code != 200:
-        print(f"❌ Failed to download data, status code: {response.status_code}")
-        return None  
-
-    try:
-        print(f"📑 Downloaded data in {execution_time:.4f} seconds. Now processing data...")
-        df = pd.read_csv(
-            BytesIO(response.content),
-            sep=";",
-            engine="python",
-            usecols=lambda col: col.lower() in ["title", "issn", "sjr best quartile", "sjr quartile", "country"],
-            on_bad_lines="skip"
-        )
-
-        # Normalize column names
-        df.columns = [col.lower().replace(" ", "_") for col in df.columns]
-
-        # Cache the data as parquet for faster access
-        df.to_parquet(cache_file)
-        print(f"💾 Cached data for {year} in {cache_file}")
-
-        return df
-
-    except Exception as e:
-        print(f"❌ Error processing data: {e}")
+    if year is None:
         return None
+
+    year = str(year).strip()
+    if not year:
+        return None
+
+    with _parquet_cache_lock:
+        if year in _parquet_cache:
+            return _parquet_cache[year]
+
+    loader = _load_r2_parquet if settings.USE_S3_MEDIA else _load_local_parquet
+    df = loader(year)
+    if df is None:
+        return None
+
+    with _parquet_cache_lock:
+        _parquet_cache[year] = df
+    return df
