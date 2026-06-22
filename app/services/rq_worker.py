@@ -12,6 +12,11 @@ def main():
         sys.path.insert(0, base_dir)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     django.setup()
+    rq_enabled = os.getenv("RQ_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not rq_enabled:
+        print("RQ worker is disabled by RQ_ENABLED=false. Exiting.")
+        return
+
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0").strip()
     redis_conn = Redis.from_url(redis_url)
 

@@ -537,7 +537,14 @@ def user_register_admin(request):
         send_template_email_async(
             "admin_registration",
             new_admin.email,
-            {"login_url": "https://profrankerapp.com/login"},
+            {
+                "login_url": f"{settings.FRONTEND_BASE_URL.rstrip('/')}/login",
+                "creator_first_name": user.first_name,
+                "creator_last_name": user.last_name,
+                "creator_email": user.email,
+                "username": new_admin.email,
+                "password": password,
+            },
         )
     except Exception as exc:
         print(f"Admin registration email failed: {exc}")

@@ -15,7 +15,21 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
-load_dotenv()
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load a single environment file based on APP_ENV unless DOTENV_FILE is provided.
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower() or "development"
+DOTENV_FILE = os.getenv("DOTENV_FILE", "").strip()
+if DOTENV_FILE:
+    load_dotenv(DOTENV_FILE)
+else:
+    env_candidate = BASE_DIR / f".env.{APP_ENV}"
+    if env_candidate.exists():
+        load_dotenv(env_candidate)
+    else:
+        load_dotenv(BASE_DIR / ".env")
 
 
 def parse_env_bool(value, default=True):
@@ -27,9 +41,6 @@ def parse_env_bool(value, default=True):
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Read media settings from .env
 MEDIA_URL = os.getenv("MEDIA_URL", "/media/")
@@ -121,7 +132,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-if DATABASE_URL:
+USE_DATABASE_URL = parse_env_bool(
+    os.getenv("USE_DATABASE_URL", "true" if APP_ENV == "production" else "false"),
+    True if APP_ENV == "production" else False,
+)
+
+if USE_DATABASE_URL and DATABASE_URL:
     parsed_database_url = urlparse(DATABASE_URL)
     parsed_query = parse_qs(parsed_database_url.query)
     DATABASES = {
@@ -250,6 +266,7 @@ CORS_ALLOWED_ORIGINS = CLIENT_ORIGINS
 CSRF_TRUSTED_ORIGINS = CLIENT_ORIGINS
 
 FRONTEND_BASE_URL = CLIENT_URL or "http://localhost:3000"
+PUBLIC_APP_BASE_URL = os.getenv("PUBLIC_APP_BASE_URL", "https://profrankerapp.com").strip()
 EMAIL_VERIFICATION_ENABLED = parse_env_bool(
     os.getenv("EMAIL_VERIFICATION_ENABLED", "true"),
     True,
@@ -275,7 +292,7 @@ RESEND_EMAIL_TEMPLATE_PATH = os.getenv(
 )
 RESEND_EMAIL_LOGO_URL = os.getenv(
     "RESEND_EMAIL_LOGO_URL",
-    "https://profrankerapp.com/ProfRanker-logo.png",
+    f"{PUBLIC_APP_BASE_URL.rstrip('/')}/ProfRanker-logo.png",
 ).strip()
 RESEND_EMAIL_FOOTER = os.getenv(
     "RESEND_EMAIL_FOOTER",
