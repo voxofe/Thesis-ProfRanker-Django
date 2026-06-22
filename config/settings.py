@@ -306,10 +306,24 @@ RESEND_EMAIL_FOOTER = os.getenv(
 
 CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
-        "LOCATION": os.path.join(BASE_DIR, "cache"),
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+USE_REDIS_CACHE = parse_env_bool(
+    os.getenv("USE_REDIS_CACHE", "true" if APP_ENV == "production" else "false"),
+    True if APP_ENV == "production" else False,
+)
+
+if USE_REDIS_CACHE and REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+            "LOCATION": os.path.join(BASE_DIR, "cache"),
+        }
+    }
 
