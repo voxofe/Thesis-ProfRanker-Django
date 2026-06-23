@@ -60,12 +60,20 @@ class PasswordHistory(models.Model):
 
 
 class UserProfile(models.Model):
+    THEME_LIGHT = "light"
+    THEME_DARK = "dark"
+    THEME_CHOICES = [
+        (THEME_LIGHT, "Light"),
+        (THEME_DARK, "Dark"),
+    ]
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
     mobile_number = models.CharField(max_length=30, blank=True, null=True)
     landline_number = models.CharField(max_length=30, blank=True, null=True)
     street_address = models.CharField(max_length=255, blank=True, null=True)
     city = models.CharField(max_length=120, blank=True, null=True)
     postal_code = models.CharField(max_length=20, blank=True, null=True)
+    theme_mode = models.CharField(max_length=5, choices=THEME_CHOICES, default=THEME_LIGHT)
     is_public_employee = models.BooleanField(default=False, blank=True, null=True)
     is_eu_citizen_non_greek = models.BooleanField(default=False, blank=True, null=True)
     has_not_participated_in_past_program = models.BooleanField(default=False, blank=True, null=True)

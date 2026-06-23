@@ -76,7 +76,6 @@ PHD_KEYWORDS_MAX = 10
 
 logger = logging.getLogger(__name__)
 
-
 def get_env_int(name, default, minimum=1, maximum=None):
     raw_value = os.getenv(name, str(default)).strip()
     try:
@@ -1673,6 +1672,7 @@ def profile_detail(request):
             profile.postal_code = postal_code
         if has_gender and gender in {"male", "female", None, ""}:
             user.gender = gender or None
+
         user.save()
 
         if is_public_employee is not None:
