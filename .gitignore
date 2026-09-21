@@ -21,6 +21,8 @@ staticfiles/
 media/
 sjr_parquets/
 
+scripts/
+
 # Compiled Python files
 *.pyc
 *.pyo
